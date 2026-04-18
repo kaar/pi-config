@@ -16,6 +16,9 @@ Personal configuration for the [PI](https://pi.dev/) coding agent. This repo is 
   - `skills/` — custom skills
 - `install.sh` — symlink setup script
 
+## Extensions
+
+- [pi-web-access](https://www.npmjs.com/package/pi-web-access)
 
 ## Skills
 

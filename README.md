@@ -18,7 +18,8 @@ Personal configuration for the [PI](https://pi.dev/) coding agent. This repo is 
 
 ## Extensions
 
-- [pi-web-access](https://www.npmjs.com/package/pi-web-access)
+- [Extensions docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md)
+- [pi-web-access](https://github.com/nicobailon/pi-web-access)
 
 ## Skills
 

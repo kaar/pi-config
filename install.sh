@@ -17,7 +17,7 @@ if [ -L "$dest" ]; then
     existing="$(readlink "$dest")"
     if [ "$existing" = "$src" ]; then
         echo "already linked"
-        return
+        exit 0
     fi
     echo "updating symlink (was $existing)"
     rm "$dest"

@@ -5,7 +5,6 @@ description: Generate a commit message for staged changes
 Gather git context by running these commands:
 - `git status --porcelain`
 - `git diff --cached`
-- `git diff`
 - `git branch --show-current`
 - `git log --oneline -5`
 

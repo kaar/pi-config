@@ -1,9 +1,13 @@
 /**
- * This extension stores todo items as files under <todo-dir> (defaults to .pi/todos,
- * or the path in PI_TODO_PATH).  Each todo is a standalone markdown file named
- * <id>.md and an optional <id>.lock file is used while a session is editing it.
+ * This extension stores todo items as files under ~/.pi/agent/todos/<session-path>,
+ * where <session-path> is derived from the working directory (e.g.
+ * --Users-name-Dev-myproject-- for /Users/name/Dev/myproject).
+ * The path can be overridden via the PI_TODO_PATH env var.
  *
- * File format in .pi/todos:
+ * Each todo is a standalone markdown file named <id>.md. An optional <id>.lock
+ * file is used while a session is editing it.
+ *
+ * File format:
  * - The file starts with a JSON object (not YAML) containing the front matter:
  *   { id, title, tags, status, created_at, assigned_to_session }
  * - After the JSON block comes optional markdown body text separated by a blank line.
@@ -36,6 +40,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import crypto from "node:crypto";
+import os from "node:os";
 import {
 	Container,
 	type Focusable,
@@ -719,12 +724,19 @@ class TodoDetailOverlayComponent {
 	}
 }
 
+function cwdToSessionPath(cwd: string): string {
+	const absolute = path.resolve(cwd);
+	const stripped = absolute.startsWith("/") ? absolute.slice(1) : absolute;
+	return `--${stripped.replace(/\//g, "-")}--`;
+}
+
 function getTodosDir(cwd: string): string {
 	const overridePath = process.env[TODO_PATH_ENV];
 	if (overridePath && overridePath.trim()) {
 		return path.resolve(cwd, overridePath.trim());
 	}
-	return path.resolve(cwd, TODO_DIR_NAME);
+	const sessionPath = cwdToSessionPath(cwd);
+	return path.join(os.homedir(), ".pi", "agent", "todos", sessionPath);
 }
 
 function getTodosDirLabel(cwd: string): string {
@@ -732,7 +744,8 @@ function getTodosDirLabel(cwd: string): string {
 	if (overridePath && overridePath.trim()) {
 		return path.resolve(cwd, overridePath.trim());
 	}
-	return TODO_DIR_NAME;
+	const sessionPath = cwdToSessionPath(cwd);
+	return `~/.pi/agent/todos/${sessionPath}`;
 }
 
 function getTodoSettingsPath(todosDir: string): string {
@@ -1798,7 +1811,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("todos", {
-		description: "List todos from .pi/todos",
+		description: "List todos from ~/.pi/agent/todos",
 		handler: async (args, ctx) => {
 			const todosDir = getTodosDir(ctx.cwd);
 			const todos = await listTodos(todosDir);

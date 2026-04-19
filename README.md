@@ -27,6 +27,10 @@ See [docs/extensions.md](docs/extensions.md)
 - [Extensions docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md)
 - [pi-web-access](https://github.com/nicobailon/pi-web-access)
 - [pi-rewind](https://github.com/arpagon/pi-rewind): automatic git-based snapshots of your working tree, allowing you to rewind file changes and conversation state.
+- [codemap](https://github.com/kcosr/codemap)
+Codemap generates a compact, token-aware map of a codebase: files, symbols, and markdown structure. Designed for feeding context to LLMs and coding agents.
+
+Did a bit of an experiment. I did not see too much value from it.
 
 ## Skills
 

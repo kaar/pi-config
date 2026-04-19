@@ -16,7 +16,13 @@ Personal configuration for the [PI](https://pi.dev/) coding agent. This repo is 
   - `skills/` — custom skills
 - `install.sh` — symlink setup script
 
+## Prompts
+
+Prompt templates are Markdown snippets that expand into full prompts. Type `/name` in the editor to invoke a template, where `name` is the filename without `.md`. See [docs/prompt-templates.md]
+
 ## Extensions
+
+See [docs/extensions.md]
 
 - [Extensions docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md)
 - [pi-web-access](https://github.com/nicobailon/pi-web-access)
@@ -26,6 +32,7 @@ Creates automatic git-based snapshots of your working tree, allowing you to rewi
 
 
 ## Skills
+See [docs/skills.md]
 
 - [Skills docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/skills.md)
 

@@ -54,6 +54,21 @@ export default function(pi: ExtensionAPI) {
     return code === 0;
   }
 
+  async function promptOrBlock(
+    message: string,
+    toolName: string,
+    ctx: ExtensionContext,
+  ): Promise<{ block: true; reason: string } | undefined> {
+    const reason = `Blocked ${toolName}: ${message}`;
+    if (!ctx.hasUI) return { block: true, reason };
+
+    const choice = await ctx.ui.select(
+      `⚠️ ${message}\n\nAllow ${toolName}?`,
+      ["Yes, allow this once", "No, block it"],
+    );
+    return choice === "Yes, allow this once" ? undefined : { block: true, reason };
+  }
+
   async function gatePath(
     filePath: string,
     toolName: string,
@@ -63,35 +78,16 @@ export default function(pi: ExtensionAPI) {
     const fileDir = nearestExistingDir(dirname(abs));
 
     const cwdRoot = await getGitRoot(ctx.cwd);
-    // Not in a git repo, nothing to guard
     if (!cwdRoot) return undefined;
 
     const fileRoot = await getGitRoot(fileDir);
-    const isOutsideRepo = !fileRoot || fileRoot !== cwdRoot;
-
-    if (isOutsideRepo) {
-      const reason = `Blocked ${toolName}: "${filePath}" is outside the current git repository`;
-      if (!ctx.hasUI) return { block: true, reason };
-
-      const choice = await ctx.ui.select(
-        `⚠️ "${filePath}" is outside the current git repository.\n\nAllow ${toolName}?`,
-        ["Yes, allow this once", "No, block it"],
-      );
-      return choice === "Yes, allow this once" ? undefined : { block: true, reason };
+    if (!fileRoot || fileRoot !== cwdRoot) {
+      return promptOrBlock(`"${filePath}" is outside the current git repository`, toolName, ctx);
     }
 
     if (await isGitTracked(abs, cwdRoot)) return undefined;
 
-    const reason = `Blocked ${toolName}: "${filePath}" is not tracked by git`;
-
-    if (!ctx.hasUI) return { block: true, reason };
-
-    const choice = await ctx.ui.select(
-      `⚠️ "${filePath}" is not tracked by git.\n\nAllow ${toolName}?`,
-      ["Yes, allow this once", "No, block it"],
-    );
-
-    return choice === "Yes, allow this once" ? undefined : { block: true, reason };
+    return promptOrBlock(`"${filePath}" is not tracked by git`, toolName, ctx);
   }
 
   pi.on("tool_call", async (event, ctx) => {

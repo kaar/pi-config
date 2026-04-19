@@ -771,6 +771,35 @@ async function readTodoSettings(todosDir: string): Promise<TodoSettings> {
 	return normalizeTodoSettings(data);
 }
 
+async function cleanupEmptyTodoDirs(): Promise<void> {
+	const base = getTodoBase();
+	let entries: string[];
+	try {
+		entries = await fs.readdir(base);
+	} catch {
+		return;
+	}
+	for (const entry of entries) {
+		if (entry === TODO_SETTINGS_NAME) continue;
+		const dirPath = path.join(base, entry);
+		try {
+			const stat = await fs.stat(dirPath);
+			if (!stat.isDirectory()) continue;
+			const contents = await fs.readdir(dirPath);
+			const hasTodos = contents.some((f) => f.endsWith(".md") || f.endsWith(".lock"));
+			if (!hasTodos) {
+				// Remove settings.json and any other leftover files, then the dir
+				for (const f of contents) {
+					await fs.unlink(path.join(dirPath, f)).catch(() => {});
+				}
+				await fs.rmdir(dirPath).catch(() => {});
+			}
+		} catch {
+			// ignore
+		}
+	}
+}
+
 async function garbageCollectTodos(todosDir: string, settings: TodoSettings): Promise<void> {
 	if (!settings.gc) return;
 
@@ -1402,6 +1431,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 		await ensureTodosDir(todosDir);
 		const settings = await readTodoSettings(todosDir);
 		await garbageCollectTodos(todosDir, settings);
+		await cleanupEmptyTodoDirs();
 	});
 
 	pi.registerTool({

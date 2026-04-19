@@ -750,7 +750,7 @@ function getTodoSettingsPath(todosDir: string): string {
 
 function normalizeTodoSettings(raw: Partial<TodoSettings>): TodoSettings {
 	const gc = raw.gc ?? DEFAULT_TODO_SETTINGS.gc;
-	const gcDays = Number.isFinite(raw.gcDays) ? raw.gcDays : DEFAULT_TODO_SETTINGS.gcDays;
+	const gcDays = Number.isFinite(raw.gcDays) ? (raw.gcDays as number) : DEFAULT_TODO_SETTINGS.gcDays;
 	return {
 		gc: Boolean(gc),
 		gcDays: Math.max(0, Math.floor(gcDays)),
@@ -1749,7 +1749,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 				return new Text(text, 0, 0);
 			}
 
-			if (!details.todo) {
+			if (!("todo" in details) || !details.todo) {
 				const text = result.content[0];
 				return new Text(text?.type === "text" ? text.text : "", 0, 0);
 			}
@@ -1874,7 +1874,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 							new TodoDetailOverlayComponent(
 								overlayTui,
 								overlayTheme,
-								overlayKeybindings,
+								overlayKeybindings as KeybindingMatcher,
 								record,
 								overlayDone,
 							),
@@ -2013,7 +2013,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 				selector = new TodoSelectorComponent(
 					tui,
 					theme,
-					keybindings,
+					keybindings as KeybindingMatcher,
 					todos,
 					(todo) => {
 						void handleSelect(todo);
@@ -2059,7 +2059,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 
 			if (nextPrompt) {
 				ctx.ui.setEditorText(nextPrompt);
-				rootTui?.requestRender();
+				(rootTui as TUI | null)?.requestRender();
 			}
 		},
 	});

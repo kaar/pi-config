@@ -37,6 +37,11 @@ Creates automatic git-based snapshots of your working tree, allowing you to rewi
   - `.pi/skills/`
   - `.agents/skills/` in `cwd` and ancestor directories (up to git repo root, or filesystem root when not in a repo)
 
+### Skill Repositories
+
+- [Anthropic Skills](https://github.com/anthropics/skills) - Document processing (docx, pdf, pptx, xlsx), web development
+- [Pi Skills](https://github.com/badlogic/pi-skills) - Web search, browser automation, Google APIs, transcription
+
 ## Resources
 
 - [PI](https://pi.dev/)

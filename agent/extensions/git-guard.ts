@@ -1,17 +1,36 @@
 /**
  * Git Guard Extension
  *
- * Intercepts write and edit tool calls to guard against unintended modifications.
- * Prompts or blocks when:
- *  - The target file is in a different git repository than the current working directory.
- *  - The target file is not tracked by git (staged or committed).
- * In non-interactive mode, blocks by default. Does nothing outside git repositories.
+ * Intercepts tool calls to guard against unintended modifications.
+ *
+ * File guarding (write/edit):
+ *  - Prompts when target file is in a different git repository than cwd.
+ *  - Prompts when target file is not tracked by git (staged or committed).
+ *  - In non-interactive mode, blocks by default. Does nothing outside git repos.
+ *
+ * Bash guarding:
+ *  - Blocks interactive git commands that would hang waiting for an editor.
+ *  - Blocks destructive git commands (reset --hard, clean -f, checkout ., etc.).
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
 import { resolve, dirname } from "node:path";
 import { existsSync } from "node:fs";
+
+const INTERACTIVE_GIT_PATTERNS: RegExp[] = [
+  /git\s+commit(?!.*(-m|--message|-F|--file|-C|--reuse-message|--no-edit))/,
+  /git\s+merge(?!.*(--no-edit|-m|-F|--file))/,
+  /git\s+rebase\s+--continue(?!.*(GIT_EDITOR|core\.editor))/,
+  /git\s+tag\s+(-a|--annotate|-s|--sign)(?!.*(-m|--message|-F|--file))/,
+];
+
+const DESTRUCTIVE_GIT_PATTERNS: RegExp[] = [
+  /git\s+reset\s+--hard/,
+  /git\s+clean\s+-[a-zA-Z]*f/,
+  /git\s+checkout\s+\./,
+  /git\s+stash(?!\s+(list|show|create))(?:\s|$)/,
+];
 
 const GIT_TIMEOUT = 5000;
 
@@ -81,6 +100,15 @@ export default function(pi: ExtensionAPI) {
     }
     if (isToolCallEventType("edit", event)) {
       return gatePath(event.input.path, "edit", ctx);
+    }
+    if (isToolCallEventType("bash", event)) {
+      const command = event.input.command ?? "";
+      if (INTERACTIVE_GIT_PATTERNS.some((p) => p.test(command))) {
+        return { block: true, reason: "Blocked: interactive git command" };
+      }
+      if (DESTRUCTIVE_GIT_PATTERNS.some((p) => p.test(command))) {
+        return { block: true, reason: "Blocked: destructive git command" };
+      }
     }
     return undefined;
   });

@@ -1,17 +1,28 @@
 /**
  * Git Guard Extension
  *
- * Blocks pi from modifying files not tracked by git (staged or committed).
- * Intercepts write and edit tool calls. Prompts the user to allow or block
- * when a target file is untracked. In non-interactive mode, blocks by default.
- * Does nothing outside git repositories.
+ * Intercepts write and edit tool calls to guard against unintended modifications.
+ * Prompts or blocks when:
+ *  - The target file is in a different git repository than the current working directory.
+ *  - The target file is not tracked by git (staged or committed).
+ * In non-interactive mode, blocks by default. Does nothing outside git repositories.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
 import { resolve, dirname } from "node:path";
+import { existsSync } from "node:fs";
 
 const GIT_TIMEOUT = 5000;
+
+function nearestExistingDir(dir: string): string {
+  while (!existsSync(dir)) {
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return dir;
+}
 
 export default function(pi: ExtensionAPI) {
   async function getGitRoot(dir: string): Promise<string | null> {
@@ -30,7 +41,7 @@ export default function(pi: ExtensionAPI) {
     ctx: ExtensionContext,
   ): Promise<{ block: true; reason: string } | undefined> {
     const abs = resolve(ctx.cwd, filePath);
-    const fileDir = dirname(abs);
+    const fileDir = nearestExistingDir(dirname(abs));
 
     const cwdRoot = await getGitRoot(ctx.cwd);
     // Not in a git repo, nothing to guard

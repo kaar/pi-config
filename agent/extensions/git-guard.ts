@@ -16,7 +16,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
 import { resolve, dirname } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 
 const INTERACTIVE_GIT_PATTERNS: RegExp[] = [
   /git\s+commit(?!.*(-m|--message|-F|--file|-C|--reuse-message|--no-edit))/,
@@ -81,7 +81,7 @@ export default function(pi: ExtensionAPI) {
     if (!cwdRoot) return undefined;
 
     const fileRoot = await getGitRoot(fileDir);
-    if (!fileRoot || fileRoot !== cwdRoot) {
+    if (!fileRoot || realpathSync(fileRoot) !== realpathSync(cwdRoot)) {
       return promptOrBlock(`"${filePath}" is outside the current git repository`, toolName, ctx);
     }
 

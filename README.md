@@ -21,6 +21,10 @@ Personal configuration for the [PI](https://pi.dev/) coding agent. This repo is 
 - [Extensions docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md)
 - [pi-web-access](https://github.com/nicobailon/pi-web-access)
 
+- [pi-rewind](https://github.com/arpagon/pi-rewind)
+Creates automatic git-based snapshots of your working tree, allowing you to rewind file changes and conversation state when the AI makes mistakes.
+
+
 ## Skills
 
 - [Skills docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/skills.md)

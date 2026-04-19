@@ -2,7 +2,6 @@
   "name": "pi-extensions",
   "private": true,
   "devDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
-    "@sinclair/typebox": "*"
+    "@mariozechner/pi-coding-agent": "*"
   }
 }

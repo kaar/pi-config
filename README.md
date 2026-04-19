@@ -10,29 +10,27 @@ Personal configuration for the [PI](https://pi.dev/) coding agent. This repo is 
 
 ## Structure
 
-- `agent/` — PI agent configuration (symlinked to `~/.pi/agent`)
-  - `settings.json` — agent settings
-  - `prompts/` — custom prompts
-  - `skills/` — custom skills
-- `install.sh` — symlink setup script
+- `agent/`: PI agent configuration (symlinked to `~/.pi/agent`)
+  - `settings.json`: agent settings
+  - `prompts/`: custom prompts
+  - `skills/`: custom skills
+- `install.sh`: symlink setup script
 
 ## Prompts
 
-Prompt templates are Markdown snippets that expand into full prompts. Type `/name` in the editor to invoke a template, where `name` is the filename without `.md`. See [docs/prompt-templates.md]
+Prompt templates are Markdown snippets that expand into full prompts. Type `/name` in the editor to invoke a template, where `name` is the filename without `.md`. See [docs/prompt-templates.md](docs/prompt-templates.md)
 
 ## Extensions
 
-See [docs/extensions.md]
+See [docs/extensions.md](docs/extensions.md)
 
 - [Extensions docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md)
 - [pi-web-access](https://github.com/nicobailon/pi-web-access)
-
-- [pi-rewind](https://github.com/arpagon/pi-rewind)
-Creates automatic git-based snapshots of your working tree, allowing you to rewind file changes and conversation state when the AI makes mistakes.
-
+- [pi-rewind](https://github.com/arpagon/pi-rewind): automatic git-based snapshots of your working tree, allowing you to rewind file changes and conversation state.
 
 ## Skills
-See [docs/skills.md]
+
+See [docs/skills.md](docs/skills.md)
 
 - [Skills docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/skills.md)
 

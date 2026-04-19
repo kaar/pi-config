@@ -38,7 +38,7 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import path from "node:path";
 import fs from "node:fs/promises";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import crypto from "node:crypto";
 import os from "node:os";
 import {
@@ -743,11 +743,6 @@ function getTodosDir(cwd: string): string {
 	return path.join(getTodoBase(), dirKey);
 }
 
-function getTodosDirLabel(cwd: string): string {
-	const dirKey = cwdToDirKey(cwd);
-	const base = process.env[TODO_PATH_ENV]?.trim() || DEFAULT_TODO_BASE;
-	return `${base}/${dirKey}`;
-}
 
 function getTodoSettingsPath(todosDir: string): string {
 	return path.join(todosDir, TODO_SETTINGS_NAME);
@@ -802,6 +797,8 @@ async function garbageCollectTodos(todosDir: string, settings: TodoSettings): Pr
 					if (!Number.isFinite(createdAt)) return;
 					if (createdAt < cutoff) {
 						await fs.unlink(filePath);
+						const lockFile = getLockPath(todosDir, id);
+						await fs.unlink(lockFile).catch(() => {});
 					}
 				} catch {
 					// ignore unreadable todo
@@ -1076,38 +1073,6 @@ async function listTodos(todosDir: string): Promise<TodoFrontMatter[]> {
 	return sortTodos(todos);
 }
 
-function listTodosSync(todosDir: string): TodoFrontMatter[] {
-	let entries: string[] = [];
-	try {
-		entries = readdirSync(todosDir);
-	} catch {
-		return [];
-	}
-
-	const todos: TodoFrontMatter[] = [];
-	for (const entry of entries) {
-		if (!entry.endsWith(".md")) continue;
-		const id = entry.slice(0, -3);
-		const filePath = path.join(todosDir, entry);
-		try {
-			const content = readFileSync(filePath, "utf8");
-			const { frontMatter } = splitFrontMatter(content);
-			const parsed = parseFrontMatter(frontMatter, id);
-			todos.push({
-				id,
-				title: parsed.title,
-				tags: parsed.tags ?? [],
-				status: parsed.status,
-				created_at: parsed.created_at,
-				assigned_to_session: parsed.assigned_to_session,
-			});
-		} catch {
-			// ignore
-		}
-	}
-
-	return sortTodos(todos);
-}
 
 function getTodoTitle(todo: TodoFrontMatter): string {
 	return todo.title || "(untitled)";
@@ -1312,9 +1277,6 @@ async function updateTodoStatus(
 	}
 	const normalizedId = validated.id;
 	const filePath = getTodoPath(todosDir, normalizedId);
-	if (!existsSync(filePath)) {
-		return { error: `Todo ${displayTodoId(id)} not found` };
-	}
 
 	const result = await withTodoLock(todosDir, normalizedId, ctx, async () => {
 		const existing = await ensureTodoExists(filePath, normalizedId);
@@ -1344,9 +1306,6 @@ async function claimTodoAssignment(
 	}
 	const normalizedId = validated.id;
 	const filePath = getTodoPath(todosDir, normalizedId);
-	if (!existsSync(filePath)) {
-		return { error: `Todo ${displayTodoId(id)} not found` };
-	}
 	const sessionId = ctx.sessionManager.getSessionId();
 	const result = await withTodoLock(todosDir, normalizedId, ctx, async () => {
 		const existing = await ensureTodoExists(filePath, normalizedId);
@@ -1386,9 +1345,6 @@ async function releaseTodoAssignment(
 	}
 	const normalizedId = validated.id;
 	const filePath = getTodoPath(todosDir, normalizedId);
-	if (!existsSync(filePath)) {
-		return { error: `Todo ${displayTodoId(id)} not found` };
-	}
 	const sessionId = ctx.sessionManager.getSessionId();
 	const result = await withTodoLock(todosDir, normalizedId, ctx, async () => {
 		const existing = await ensureTodoExists(filePath, normalizedId);
@@ -1425,9 +1381,6 @@ async function deleteTodo(
 	}
 	const normalizedId = validated.id;
 	const filePath = getTodoPath(todosDir, normalizedId);
-	if (!existsSync(filePath)) {
-		return { error: `Todo ${displayTodoId(id)} not found` };
-	}
 
 	const result = await withTodoLock(todosDir, normalizedId, ctx, async () => {
 		const existing = await ensureTodoExists(filePath, normalizedId);
@@ -1451,16 +1404,15 @@ export default function todosExtension(pi: ExtensionAPI) {
 		await garbageCollectTodos(todosDir, settings);
 	});
 
-	const todosDirLabel = getTodosDirLabel(process.cwd());
-
 	pi.registerTool({
 		name: "todo",
 		label: "Todo",
-		description:
-			`Manage file-based todos in ${todosDirLabel} (list, list-all, get, create, update, append, delete, claim, release). ` +
+		get description() {
+			return `Manage file-based todos in ${getTodosDir(process.cwd())} (list, list-all, get, create, update, append, delete, claim, release). ` +
 			"Title is the short summary; body is long-form markdown notes (update replaces, append adds). " +
 			"Todo ids are shown as TODO-<hex>; id parameters accept TODO-<hex> or the raw hex filename. " +
-			"Claim tasks before working on them to avoid conflicts, and close them when complete.", 
+			"Claim tasks before working on them to avoid conflicts, and close them when complete.";
+		},
 		parameters: TodoParams,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -1572,12 +1524,6 @@ export default function todosExtension(pi: ExtensionAPI) {
 					const normalizedId = validated.id;
 					const displayId = formatTodoId(normalizedId);
 					const filePath = getTodoPath(todosDir, normalizedId);
-					if (!existsSync(filePath)) {
-						return {
-							content: [{ type: "text", text: `Todo ${displayId} not found` }],
-							details: { action: "update", error: "not found" },
-						};
-					}
 					const result = await withTodoLock(todosDir, normalizedId, ctx, async () => {
 						const existing = await ensureTodoExists(filePath, normalizedId);
 						if (!existing) return { error: `Todo ${displayId} not found` } as const;
@@ -1625,12 +1571,6 @@ export default function todosExtension(pi: ExtensionAPI) {
 					const normalizedId = validated.id;
 					const displayId = formatTodoId(normalizedId);
 					const filePath = getTodoPath(todosDir, normalizedId);
-					if (!existsSync(filePath)) {
-						return {
-							content: [{ type: "text", text: `Todo ${displayId} not found` }],
-							details: { action: "append", error: "not found" },
-						};
-					}
 					const result = await withTodoLock(todosDir, normalizedId, ctx, async () => {
 						const existing = await ensureTodoExists(filePath, normalizedId);
 						if (!existing) return { error: `Todo ${displayId} not found` } as const;
@@ -1812,7 +1752,8 @@ export default function todosExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("todos", {
-		description: `List todos from ${DEFAULT_TODO_BASE}`,
+		description: `List todos from ${getTodosDir(process.cwd())}`,
+
 		handler: async (args, ctx) => {
 			const todosDir = getTodosDir(ctx.cwd);
 			const todos = await listTodos(todosDir);

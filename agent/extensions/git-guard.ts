@@ -29,6 +29,7 @@ const DESTRUCTIVE_GIT_PATTERNS: RegExp[] = [
   /git\s+reset\s+--hard/,
   /git\s+clean\s+-[a-zA-Z]*f/,
   /git\s+checkout\s+\./,
+  // Allows: list, show, create (read-only)
   /git\s+stash(?!\s+(list|show|create))(?:\s|$)/,
 ];
 

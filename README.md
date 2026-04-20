@@ -4,6 +4,8 @@ Personal configuration for the [PI](https://pi.dev/) coding agent. This repo is 
 
 ## Setup
 
+Creates a symlink from `~/.pi/agent` to the `agent/` directory in this repo.
+
 ```bash
 ./install.sh
 ```
@@ -11,48 +13,67 @@ Personal configuration for the [PI](https://pi.dev/) coding agent. This repo is 
 ## Structure
 
 - `agent/`: PI agent configuration (symlinked to `~/.pi/agent`)
-  - `settings.json`: agent settings
-  - `prompts/`: custom prompts
+  - `settings.json`: agent settings (provider, model, thinking level, packages)
+  - `extensions/`: TypeScript extensions that hook into the agent
+  - `prompts/`: custom prompt templates
   - `skills/`: custom skills
+  - `bin/`: bundled binaries (e.g. `fd`)
+  - `sessions/`: active session data
+  - `todos/`: todo tracking
+- `docs/`: documentation
+- `AGENTS.md`: guidelines for parallel agents (tool usage, git safety rules, writing style)
 - `install.sh`: symlink setup script
-
-## Prompts
-
-Prompt templates are Markdown snippets that expand into full prompts. Type `/name` in the editor to invoke a template, where `name` is the filename without `.md`. See [docs/prompt-templates.md](docs/prompt-templates.md)
 
 ## Extensions
 
-See [docs/extensions.md](docs/extensions.md)
+TypeScript extensions that add functionality to the agent. See [docs/extensions.md](docs/extensions.md).
 
-- [Extensions docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md)
-- [pi-web-access](https://github.com/nicobailon/pi-web-access)
-- [pi-rewind](https://github.com/arpagon/pi-rewind): automatic git-based snapshots of your working tree, allowing you to rewind file changes and conversation state.
-- [codemap](https://github.com/kcosr/codemap)
-Codemap generates a compact, token-aware map of a codebase: files, symbols, and markdown structure. Designed for feeding context to LLMs and coding agents.
+### Custom Extensions
 
-Did a bit of an experiment. I did not see too much value from it.
+- **git-guard** - Safety checks for destructive git operations
+- **git-checkpoint** - Automatic git-based checkpoints
+- **todos** - Todo management within sessions
+
+### Third-Party Extensions
+
+- [pi-web-access](https://github.com/nicobailon/pi-web-access) - Web browsing
+
+## Prompts
+
+Prompt templates are Markdown snippets that expand into full prompts. Type `/name` in the editor to invoke a template, where `name` is the filename without `.md`. See [docs/prompt-templates.md](docs/prompt-templates.md).
+
+- **review-staged** - Review staged git changes for bugs, security issues, and error handling gaps
 
 ## Skills
 
-See [docs/skills.md](docs/skills.md)
+Reusable, invokable capabilities. See [docs/skills.md](docs/skills.md).
 
-- [Skills docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/skills.md)
+### Custom Skills
 
-### Location
-- Global:
-  - `~/.pi/agent/skills/`
-  - `~/.agents/skills/`
-- Project:
-  - `.pi/skills/`
-  - `.agents/skills/` in `cwd` and ancestor directories (up to git repo root, or filesystem root when not in a repo)
+- **generate-commit-message** - Generates a commit message from staged changes
+- **review-staged-changes** - Reviews staged changes for bugs, security issues, and error handling gaps (P0-P3 priority)
+
+### Skill Locations
+
+- Global: `~/.pi/agent/skills/`, `~/.agents/skills/`
+- Project: `.pi/skills/`, `.agents/skills/` (searched up to git root)
 
 ### Skill Repositories
 
 - [Anthropic Skills](https://github.com/anthropics/skills) - Document processing (docx, pdf, pptx, xlsx), web development
 - [Pi Skills](https://github.com/badlogic/pi-skills) - Web search, browser automation, Google APIs, transcription
 
+## Docs
+
+- [extensions.md](docs/extensions.md) - Extension authoring guide
+- [skills.md](docs/skills.md) - Skills authoring guide
+- [prompt-templates.md](docs/prompt-templates.md) - Prompt template syntax
+- [session.md](docs/session.md) - Session management
+
 ## Resources
 
 - [PI](https://pi.dev/)
 - [Pi Mono - Coding Agent](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/)
+- [Extensions docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md)
+- [Skills docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/skills.md)
 - [Packages](https://pi.dev/packages)

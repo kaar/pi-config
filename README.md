@@ -28,6 +28,13 @@ Creates a symlink from `~/.pi/agent` to the `agent/` directory in this repo.
 
 TypeScript extensions that add functionality to the agent. See [docs/extensions.md](docs/extensions.md).
 
+### [pi-web-access](https://github.com/nicobailon/pi-web-access)
+Web browsing in PI. Provides tools for searching the web, fetching URL content, and retrieving stored results.
+
+- **web_search** - Search the web with one or more queries, returns AI-synthesized answers with citations
+- **fetch_content** - Fetch and extract readable content from URLs, YouTube videos, GitHub repos, and local videos
+- **get_search_content** - Retrieve full stored content from previous web_search or fetch_content calls
+
 ### Custom Extensions
 
 - **git-guard** - Safety checks for destructive git operations
@@ -36,7 +43,6 @@ TypeScript extensions that add functionality to the agent. See [docs/extensions.
 
 ### Third-Party Extensions
 
-- [pi-web-access](https://github.com/nicobailon/pi-web-access) - Web browsing
 
 ## Prompts
 

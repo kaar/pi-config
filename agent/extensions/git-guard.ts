@@ -18,6 +18,8 @@ import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
 import { resolve, dirname } from "node:path";
 import { existsSync, realpathSync } from "node:fs";
 
+const COMMIT_PATTERN = /git\s+commit/;
+
 const INTERACTIVE_GIT_PATTERNS: RegExp[] = [
   /git\s+commit(?!.*(-m|--message|-F|--file|-C|--reuse-message|--no-edit))/,
   /git\s+merge(?!.*(--no-edit|-m|-F|--file))/,
@@ -108,6 +110,9 @@ export default function(pi: ExtensionAPI) {
       }
       if (DESTRUCTIVE_GIT_PATTERNS.some((p) => p.test(command))) {
         return { block: true, reason: "Blocked: destructive git command" };
+      }
+      if (COMMIT_PATTERN.test(command)) {
+        return promptOrBlock(`git commit requires approval:\n${command}`, "bash", ctx);
       }
     }
     return undefined;

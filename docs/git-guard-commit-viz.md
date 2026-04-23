@@ -10,7 +10,7 @@ Enhance the commit approval flow in `git-guard.ts` with three changes:
 
 1. Parse the commit message out of the git command
 2. Display it prominently in the approval dialog, separated from the raw command
-3. Add an "Edit message" option that opens `ctx.ui.editor()` for interactive editing
+3. Add an "Edit message" option that opens `$EDITOR` (or git's configured editor) for interactive editing
 
 ## Implementation
 
@@ -51,16 +51,64 @@ Command:
 The select dialog offers three choices instead of two:
 
 1. **Yes, allow this once** - proceed with the command (mutates `event.input.command` if message was edited)
-2. **Edit message** - open `ctx.ui.editor()` prefilled with the parsed message
+2. **Edit message** - open the user's editor for interactive editing
 3. **No, block it** - block the command (current behavior)
 
 When the user picks "Edit message":
-- Open `ctx.ui.editor("Edit commit message", currentMessage)`
-- If the user submits edited text, reconstruct the git command via `replaceCommitMessage` and update the displayed message
+- Resolve the editor command using `resolveEditor()` (see below)
+- Write the current commit message to a temp file via `node:os` `tmpdir()` and `node:fs` `writeFileSync`
+- Use `ctx.ui.custom()` to suspend the TUI and spawn the editor with full terminal access (same pattern as `interactive-shell.ts`)
+- Read the temp file back after the editor exits, clean up the temp file
+- If the message changed, reconstruct the git command via `replaceCommitMessage` and update the displayed message
 - Re-display the approval dialog with the updated command and message
-- If the user cancels the editor (returns `undefined`) or submits unchanged text, re-display the approval dialog unchanged
+- If the editor exits non-zero or the message is unchanged, re-display the approval dialog unchanged
 
-Must use `ctx.ui.editor()` (pi's built-in editor), not an external `$EDITOR`. Pi's bash tool cannot handle interactive programs (vim, nano, etc.) because it lacks TTY passthrough. Approaches like rewriting the command to `git commit --edit -F <tmpfile>` will hang pi.
+#### Editor Resolution
+
+Add `resolveEditor(): string` that checks the following in order (matching git's own behavior):
+
+1. `$GIT_EDITOR` environment variable
+2. `git config core.editor` (via `spawnSync`)
+3. `$VISUAL` environment variable
+4. `$EDITOR` environment variable
+5. Fall back to `"vi"`
+
+#### TUI Suspension Pattern
+
+Use `ctx.ui.custom()` to get TUI access, following the pattern from `interactive-shell.ts`:
+
+```typescript
+const exitCode = await ctx.ui.custom<number | null>((tui, _theme, _kb, done) => {
+  tui.stop();
+  process.stdout.write("\x1b[2J\x1b[H");
+
+  const result = spawnSync(editorCmd, editorArgs, {
+    stdio: "inherit",
+    env: process.env,
+  });
+
+  tui.start();
+  tui.requestRender(true);
+  done(result.status);
+  return { render: () => [], invalidate: () => {} };
+});
+```
+
+This suspends the TUI, gives the editor full terminal control, then restores the TUI when the editor exits. The editor command should be split into program and arguments using a simple shell-word split (handles cases like `"code --wait"`).
+
+#### Temp File
+
+Use a descriptive filename so the editor shows something meaningful in its title bar:
+
+```typescript
+const tmpFile = join(tmpdir(), `pi-commit-msg-${Date.now()}.txt`);
+writeFileSync(tmpFile, currentMessage);
+// ... spawn editor ...
+const edited = readFileSync(tmpFile, "utf-8");
+unlinkSync(tmpFile);
+```
+
+Wrap the spawn and read in a try/finally to ensure cleanup.
 
 ### 4. Command Reconstruction
 
@@ -79,6 +127,8 @@ All changes stay in `git-guard.ts`. No new files or extensions needed.
 ### Functions to add
 - `parseCommitMessage(command: string): string | null`
 - `replaceCommitMessage(command: string, newMessage: string): string`
+- `resolveEditor(): string`
+- `openEditorForMessage(message: string, ctx: ExtensionContext): Promise<string | null>` (handles temp file, TUI suspension, cleanup; returns edited message or `null` on failure/no change)
 - `promptCommitOrBlock(event: BashToolCallEvent, ctx: ExtensionContext): Promise<{ block: true; reason: string } | undefined>`
 
 ### Functions to modify
@@ -87,6 +137,10 @@ All changes stay in `git-guard.ts`. No new files or extensions needed.
 
 ### Imports to add
 - `BashToolCallEvent` type from `@mariozechner/pi-coding-agent`
+- `spawnSync` from `node:child_process`
+- `writeFileSync`, `readFileSync`, `unlinkSync` from `node:fs`
+- `tmpdir` from `node:os`
+- `join` from `node:path`
 
 ## Event Mutation
 
@@ -96,4 +150,5 @@ When the user edits the commit message and approves, mutate `event.input.command
 
 - Non-interactive mode (`!ctx.hasUI`): unchanged, blocks by default with the raw command in the reason
 - Unparseable commit messages (no `-m`, uses `-F`/`-C`, etc.): falls back to current two-option dialog with raw command
-- Editor cancel or unchanged text: returns to the approval dialog without changes
+- Editor exits non-zero or unchanged text: returns to the approval dialog without changes
+- No `ctx.hasUI`: cannot use `ctx.ui.custom()`, so the edit option is not available (two-option dialog only)

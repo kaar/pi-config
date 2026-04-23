@@ -33,6 +33,7 @@ const DESTRUCTIVE_GIT_PATTERNS: RegExp[] = [
   /git\s+checkout\s+\./,
   // Allows: list, show, create (read-only)
   /git\s+stash(?!\s+(list|show|create))(?:\s|$)/,
+  /git\s+add\s+(-A|--all|\.)/,
 ];
 
 const GIT_TIMEOUT = 5000;

@@ -102,25 +102,6 @@ function resolveEditor(): string {
   return "vi";
 }
 
-function splitEditorCommand(editor: string): [string, string[]] {
-  const parts: string[] = [];
-  let current = "";
-  let inQuote: string | null = null;
-  for (const ch of editor) {
-    if (inQuote) {
-      if (ch === inQuote) { inQuote = null; } else { current += ch; }
-    } else if (ch === '"' || ch === "'") {
-      inQuote = ch;
-    } else if (ch === " " || ch === "\t") {
-      if (current) { parts.push(current); current = ""; }
-    } else {
-      current += ch;
-    }
-  }
-  if (current) parts.push(current);
-  return [parts[0] || editor, parts.slice(1)];
-}
-
 async function openEditorForMessage(
   message: string,
   ctx: ExtensionContext,
@@ -128,8 +109,11 @@ async function openEditorForMessage(
   if (!ctx.hasUI) return null;
 
   const editorCmd = resolveEditor();
-  const [program, editorArgs] = splitEditorCommand(editorCmd);
   const tmpFile = join(tmpdir(), `pi-commit-msg-${Date.now()}.txt`);
+  const shell = process.env.SHELL || "/bin/sh";
+  // Shell-escape the temp file path and build full command
+  const escapedPath = tmpFile.replace(/'/g, "'\\''");
+  const fullCommand = `${editorCmd} '${escapedPath}'`;
 
   try {
     writeFileSync(tmpFile, message);
@@ -138,7 +122,7 @@ async function openEditorForMessage(
       tui.stop();
       process.stdout.write("\x1b[2J\x1b[H");
 
-      const result = spawnSync(program, [...editorArgs, tmpFile], {
+      const result = spawnSync(shell, ["-c", fullCommand], {
         stdio: "inherit",
         env: process.env,
       });

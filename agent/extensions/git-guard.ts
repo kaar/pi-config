@@ -49,8 +49,11 @@ function nearestExistingDir(dir: string): string {
 
 export default function(pi: ExtensionAPI) {
   async function getGitRoot(dir: string): Promise<string | null> {
-    const { code, stdout } = await pi.exec("git", ["-C", dir, "rev-parse", "--show-toplevel"], { timeout: GIT_TIMEOUT });
-    return code === 0 ? stdout.trim() : null;
+    const realDir = existsSync(dir) ? realpathSync(dir) : dir;
+    const { code, stdout } = await pi.exec("git", ["-C", realDir, "rev-parse", "--show-toplevel"], { timeout: GIT_TIMEOUT });
+    if (code !== 0) return null;
+    const root = stdout.trim();
+    return existsSync(root) ? realpathSync(root) : null;
   }
 
   async function isGitTracked(filePath: string, gitDir: string): Promise<boolean> {
@@ -85,11 +88,12 @@ export default function(pi: ExtensionAPI) {
     if (!cwdRoot) return undefined;
 
     const fileRoot = await getGitRoot(fileDir);
-    if (!fileRoot || realpathSync(fileRoot) !== realpathSync(cwdRoot)) {
+    if (!fileRoot || fileRoot !== cwdRoot) {
       return promptOrBlock(`"${filePath}" is outside the current git repository`, toolName, ctx);
     }
 
-    if (await isGitTracked(abs, cwdRoot)) return undefined;
+    const realAbs = existsSync(abs) ? realpathSync(abs) : abs;
+    if (await isGitTracked(realAbs, cwdRoot)) return undefined;
 
     // New files (don't exist yet) are always allowed
     if (!existsSync(abs)) return undefined;

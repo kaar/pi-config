@@ -88,6 +88,9 @@ export default function(pi: ExtensionAPI) {
 
     if (await isGitTracked(abs, cwdRoot)) return undefined;
 
+    // New files (don't exist yet) are always allowed
+    if (!existsSync(abs)) return undefined;
+
     return promptOrBlock(`"${filePath}" is not tracked by git`, toolName, ctx);
   }
 

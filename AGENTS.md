@@ -23,6 +23,9 @@
 - No fluff or cheerful filler text
 - Technical prose only, be kind but direct (e.g., "Thanks @user" not "Thanks so much @user!")
 
+## Path Resolution in Extensions
+- When writing extensions that operate on file paths, assume paths may contain symlinks. Resolve them with `realpathSync` (or equivalent) before comparing paths or passing them to tools like git or file watchers. A path that looks correct can silently fail if a symlink component is not resolved.
+
 ## **CRITICAL** Tool Usage Rules **CRITICAL**
 - NEVER use sed/cat to read a file or a range of a file. Always use the read tool (use offset + limit for ranged reads).
 - You MUST read every file you modify in full before editing.

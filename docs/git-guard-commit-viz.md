@@ -16,7 +16,7 @@ Enhance the commit approval flow in `git-guard.ts` with three changes:
 
 ### 1. Message Parser
 
-Add `parseCommitMessage(command: string): string | null`.
+`parseCommitMessage(command: string): string | null`
 
 Handles:
 - `-m "message"` and `-m 'message'`
@@ -28,7 +28,7 @@ Returns `null` for commands using `-F`/`--file`, `-C`/`--reuse-message`, or unpa
 
 ### 2. Formatted Approval Dialog
 
-Replace the current `promptOrBlock` call for commits with a dedicated `promptCommitOrBlock` function.
+`promptCommitOrBlock` replaces the `promptOrBlock` call for commits.
 
 The `ctx.ui.select` title uses `ctx.ui.theme` for formatting:
 
@@ -63,9 +63,11 @@ When the user picks "Edit message":
 - Re-display the approval dialog with the updated command and message
 - If the editor exits non-zero or the message is unchanged, re-display the approval dialog unchanged
 
+The dialog loop uses `while (true)` so the user can edit multiple times before approving or blocking.
+
 #### Editor Resolution
 
-Add `resolveEditor(): string` that checks the following in order (matching git's own behavior):
+`resolveEditor(): string` checks the following in order (matching git's own behavior):
 
 1. `$GIT_EDITOR` environment variable
 2. `git config core.editor` (via `spawnSync`)
@@ -75,14 +77,20 @@ Add `resolveEditor(): string` that checks the following in order (matching git's
 
 #### TUI Suspension Pattern
 
-Use `ctx.ui.custom()` to get TUI access, following the pattern from `interactive-shell.ts`:
+Use `ctx.ui.custom()` to get TUI access, following the pattern from `interactive-shell.ts`.
+
+The editor must be spawned through a shell (`$SHELL -c "editor 'tmpfile'"`) rather than directly via `spawnSync(program, args)`. Direct spawning fails silently for editors that rely on shell PATH resolution, aliases, or complex command strings like `"code --wait"`. The shell-based approach handles all of these cases.
 
 ```typescript
+const shell = process.env.SHELL || "/bin/sh";
+const escapedPath = tmpFile.replace(/'/g, "'\\''");
+const fullCommand = `${editorCmd} '${escapedPath}'`;
+
 const exitCode = await ctx.ui.custom<number | null>((tui, _theme, _kb, done) => {
   tui.stop();
   process.stdout.write("\x1b[2J\x1b[H");
 
-  const result = spawnSync(editorCmd, editorArgs, {
+  const result = spawnSync(shell, ["-c", fullCommand], {
     stdio: "inherit",
     env: process.env,
   });
@@ -94,7 +102,7 @@ const exitCode = await ctx.ui.custom<number | null>((tui, _theme, _kb, done) => 
 });
 ```
 
-This suspends the TUI, gives the editor full terminal control, then restores the TUI when the editor exits. The editor command should be split into program and arguments using a simple shell-word split (handles cases like `"code --wait"`).
+The temp file path is shell-escaped using single-quote wrapping with interior quote escaping (`'\\''`).
 
 #### Temp File
 
@@ -102,40 +110,42 @@ Use a descriptive filename so the editor shows something meaningful in its title
 
 ```typescript
 const tmpFile = join(tmpdir(), `pi-commit-msg-${Date.now()}.txt`);
-writeFileSync(tmpFile, currentMessage);
-// ... spawn editor ...
-const edited = readFileSync(tmpFile, "utf-8");
-unlinkSync(tmpFile);
 ```
 
 Wrap the spawn and read in a try/finally to ensure cleanup.
 
 ### 4. Command Reconstruction
 
-Add `replaceCommitMessage(command: string, newMessage: string): string`.
+`replaceCommitMessage(command: string, newMessage: string): string`
 
 Strips all existing `-m`/`--message` arguments (quoted, unquoted, `=` form) and inserts a single `-m "..."` after `git commit`. Escapes backslashes and double quotes in the new message. Preserves all other flags and arguments.
 
-### 5. Remove Commit from INTERACTIVE_GIT_PATTERNS
+### 5. Interactive Commit Guarding
 
-The old `INTERACTIVE_GIT_PATTERNS` entry for `git commit` hard-blocked commits without `-m`/`--message`/`-F` etc. before they could reach the approval dialog. Since `COMMIT_PATTERN` now handles all commits (with or without `-m`), remove the `git commit` entry from `INTERACTIVE_GIT_PATTERNS`. Commits without a parseable message fall through to the two-option fallback dialog.
+The old `INTERACTIVE_GIT_PATTERNS` entry for `git commit` was removed since `COMMIT_PATTERN` now handles all commits. However, interactive commits (those without any message source flag) must still be hard-blocked to prevent the agent from hanging on an editor prompt.
+
+This is handled inside `promptCommitOrBlock`: when `parseCommitMessage` returns `null`, check whether the command contains any message source flag (`-m`, `--message`, `-F`, `--file`, `-C`, `--reuse-message`, `--no-edit`). If none are present, hard-block with a descriptive reason. If a flag is present but unparseable (e.g. `-F`, `-C`), fall back to the two-option prompt dialog.
 
 ## Scope
 
 All changes stay in `git-guard.ts`. No new files or extensions needed.
 
-### Functions to add
+### Functions added (module-level)
 - `parseCommitMessage(command: string): string | null`
 - `replaceCommitMessage(command: string, newMessage: string): string`
 - `resolveEditor(): string`
 - `openEditorForMessage(message: string, ctx: ExtensionContext): Promise<string | null>` (handles temp file, TUI suspension, cleanup; returns edited message or `null` on failure/no change)
+
+### Functions added (extension-scoped, inside `export default`)
 - `promptCommitOrBlock(event: BashToolCallEvent, ctx: ExtensionContext): Promise<{ block: true; reason: string } | undefined>`
 
-### Functions to modify
-- The `tool_call` handler's `COMMIT_PATTERN` branch: call `promptCommitOrBlock(event, ctx)` instead of `promptOrBlock`
-- `INTERACTIVE_GIT_PATTERNS`: remove the `git commit` entry
+### Functions modified
+- The `tool_call` handler's `COMMIT_PATTERN` branch: calls `promptCommitOrBlock(event, ctx)` instead of `promptOrBlock`
 
-### Imports to add
+### Constants modified
+- `INTERACTIVE_GIT_PATTERNS`: removed the `git commit` entry (now handled by `promptCommitOrBlock`)
+
+### Imports added
 - `BashToolCallEvent` type from `@mariozechner/pi-coding-agent`
 - `spawnSync` from `node:child_process`
 - `writeFileSync`, `readFileSync`, `unlinkSync` from `node:fs`
@@ -148,7 +158,8 @@ When the user edits the commit message and approves, mutate `event.input.command
 
 ## Fallback Behavior
 
-- Non-interactive mode (`!ctx.hasUI`): unchanged, blocks by default with the raw command in the reason
-- Unparseable commit messages (no `-m`, uses `-F`/`-C`, etc.): falls back to current two-option dialog with raw command
+- Non-interactive mode (`!ctx.hasUI`): blocks by default with the raw command in the reason
+- Interactive commits (no message source flag): hard-blocked to prevent editor hangs
+- Unparseable commit messages (uses `-F`/`-C`/etc.): falls back to two-option dialog with raw command
 - Editor exits non-zero or unchanged text: returns to the approval dialog without changes
-- No `ctx.hasUI`: cannot use `ctx.ui.custom()`, so the edit option is not available (two-option dialog only)
+- No `ctx.hasUI`: cannot use `ctx.ui.custom()`, so the edit option is not available

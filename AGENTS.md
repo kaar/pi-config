@@ -2,7 +2,8 @@
 - **CRITICAL**: NEVER use sed/cat to read a file or a range of a file. Always use the read tool.
 - Use `gh pr diff` to get git diffs for PRs when reviewing.
 - When reading a file in full, do not use `offset` or `limit`.
-- Use `rg` (ripgrep) instead of `grep` for searching.
+- Use `rg` (ripgrep) instead of `grep` for text searching.
+- Use `fd` instead of `find` for file searching.
 
 ## Behavior
 - Do NOT start implementing, designing, or modifying code unless explicitly asked

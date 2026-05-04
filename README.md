@@ -41,7 +41,9 @@ Web browsing in PI. Provides tools for searching the web, fetching URL content, 
 - **git-checkpoint** - Automatic git-based checkpoints
 - **todos** - Todo management within sessions
 
-### Third-Party Extensions
+### Third-Party Packages
+
+- **[pi-interactive-subagents](https://github.com/HazAT/pi-interactive-subagents)** - Interactive sub-agent management (experimental, under evaluation)
 
 
 ## Prompts
@@ -58,6 +60,7 @@ Reusable, invokable capabilities. See [docs/skills.md](docs/skills.md).
 
 - **generate-commit-message** - Generates a commit message from staged changes
 - **review-staged-changes** - Reviews staged changes for bugs, security issues, and error handling gaps (P0-P3 priority)
+
 
 ### Skill Locations
 

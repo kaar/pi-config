@@ -4,6 +4,7 @@
   "defaultModel": "claude-opus-4-6",
   "defaultThinkingLevel": "medium",
   "packages": [
-    "npm:pi-web-access"
+    "npm:pi-web-access",
+    "git:github.com/HazAT/pi-interactive-subagents"
   ]
 }

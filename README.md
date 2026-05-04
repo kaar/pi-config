@@ -35,15 +35,14 @@ Web browsing in PI. Provides tools for searching the web, fetching URL content, 
 - **fetch_content** - Fetch and extract readable content from URLs, YouTube videos, GitHub repos, and local videos
 - **get_search_content** - Retrieve full stored content from previous web_search or fetch_content calls
 
+### [pi-interactive-subagents](https://github.com/HazAT/pi-interactive-subagents)
+Interactive sub-agent management (experimental, under evaluation).
+
 ### Custom Extensions
 
 - **git-guard** - Safety checks for destructive git operations
 - **git-checkpoint** - Automatic git-based checkpoints
 - **todos** - Todo management within sessions
-
-### Third-Party Packages
-
-- **[pi-interactive-subagents](https://github.com/HazAT/pi-interactive-subagents)** - Interactive sub-agent management (experimental, under evaluation)
 
 
 ## Prompts

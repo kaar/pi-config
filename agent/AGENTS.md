@@ -26,6 +26,9 @@
 - No filler phrases ("I'd be happy to", "Great question!", "Here's the thing:")
 - Avoid em dashes as sentence interrupters. Use periods, commas, or parentheses instead
 
+## Markdown
+- When writing markdown files, do not hard-wrap prose. One paragraph per line; let the editor soft-wrap.
+
 ## Shell scripts
 - Shebang: `#!/usr/bin/env bash` (portable, picks up Homebrew bash on macOS)
 - Strict mode at the top of every script:

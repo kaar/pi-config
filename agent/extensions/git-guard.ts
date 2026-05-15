@@ -35,6 +35,7 @@ const DESTRUCTIVE_GIT_PATTERNS: RegExp[] = [
   // Allows: list, show, create (read-only)
   /git\s+stash(?!\s+(list|show|create))(?:\s|$)/,
   /git\s+add\s+(-A|--all|\.)/,
+  /git\s+rm\s+(?:-[a-zA-Z]*f[a-zA-Z]*|--force)/,
 ];
 
 const GIT_TIMEOUT = 5000;
@@ -142,6 +143,8 @@ async function openEditorForMessage(
     try { unlinkSync(tmpFile); } catch {}
   }
 }
+
+const sessionTouchedFiles = new Set<string>();
 
 export default function(pi: ExtensionAPI) {
   async function getGitRoot(dir: string): Promise<string | null> {
@@ -261,10 +264,18 @@ export default function(pi: ExtensionAPI) {
 
   pi.on("tool_call", async (event, ctx) => {
     if (isToolCallEventType("write", event)) {
-      return gatePath(event.input.path, "write", ctx);
+      const abs = resolve(ctx.cwd, event.input.path);
+      if (sessionTouchedFiles.has(abs)) return undefined;
+      const result = await gatePath(event.input.path, "write", ctx);
+      if (!result) sessionTouchedFiles.add(abs);
+      return result;
     }
     if (isToolCallEventType("edit", event)) {
-      return gatePath(event.input.path, "edit", ctx);
+      const abs = resolve(ctx.cwd, event.input.path);
+      if (sessionTouchedFiles.has(abs)) return undefined;
+      const result = await gatePath(event.input.path, "edit", ctx);
+      if (!result) sessionTouchedFiles.add(abs);
+      return result;
     }
     if (isToolCallEventType("bash", event)) {
       const command = event.input.command ?? "";

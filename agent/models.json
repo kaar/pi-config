@@ -1,21 +1,43 @@
 {
   "providers": {
-    "azure-qwen3": {
-      "baseUrl": "http://localhost:8080/v1",
+    "ollama": {
       "api": "openai-completions",
-      "apiKey": "llama-cpp-ignored",
+      "apiKey": "ollama",
+      "baseUrl": "http://localhost:11434/v1",
       "compat": {
         "supportsDeveloperRole": false,
-        "supportsReasoningEffort": false,
-        "supportsUsageInStreaming": false
+        "supportsReasoningEffort": false
       },
       "models": [
         {
-          "id": "qwen3-1.7b",
-          "name": "Qwen3 1.7B (Azure CPU)",
-          "contextWindow": 8192,
-          "maxTokens": 2048,
-          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          "compat": {
+            "requiresReasoningContentOnAssistantMessages": true
+          },
+          "contextWindow": 131072,
+          "id": "qwen3.5:4b",
+          "maxTokens": 16000,
+          "name": "Qwen3.5 4B (local, fast)",
+          "reasoning": true
+        },
+        {
+          "compat": {
+            "requiresReasoningContentOnAssistantMessages": true
+          },
+          "contextWindow": 131072,
+          "id": "qwen3.5:8b",
+          "maxTokens": 16000,
+          "name": "Qwen3.5 8B (local)",
+          "reasoning": true
+        },
+        {
+          "_launch": true,
+          "contextWindow": 262144,
+          "id": "qwen3.5:4b",
+          "input": [
+            "text",
+            "image"
+          ],
+          "reasoning": true
         }
       ]
     }

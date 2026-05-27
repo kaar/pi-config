@@ -1,11 +1,11 @@
 {
-  "lastChangelogVersion": "0.75.4",
-  "defaultProvider": "anthropic",
   "defaultModel": "claude-opus-4-7",
+  "defaultProvider": "anthropic",
   "defaultThinkingLevel": "high",
+  "hideThinkingBlock": false,
+  "lastChangelogVersion": "0.75.4",
   "packages": [
     "npm:pi-web-access",
     "git:github.com/HazAT/pi-interactive-subagents"
-  ],
-  "hideThinkingBlock": false
+  ]
 }

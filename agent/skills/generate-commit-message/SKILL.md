@@ -7,23 +7,21 @@ allowed-tools: Bash(git *)
 
 ## Context
 
-- Status: !`git status --porcelain`
+- Staged files: !`git diff --cached --name-status`
 - Staged changes: !`git diff --cached`
-- Unstaged changes: !`git diff`
 - Current branch: !`git branch --show-current`
 - Recent commits: !`git log --oneline -5`
 
 ## Your task
 
-Analyze the changes shown above and generate a commit message.
+Generate a commit message describing **only** the staged changes shown above.
 
-**Output requirements:**
-- Output ONLY the commit message text, nothing else
-- No explanations, no tool calls, no markdown formatting
-- The message should be short but descriptive
-- Follow the commit style shown in recent commits
-- If there are staged changes, base the message on those
-- If no staged changes exist, base the message on unstaged changes
+**Rules:**
+- If the staged diff is empty, output exactly: `No staged changes. Stage files with 'git add' first.` and stop.
+- Ignore unstaged or untracked files entirely, even if hinted at elsewhere.
+- Output ONLY the commit message text, nothing else.
+- No explanations, no tool calls, no markdown formatting.
+- Follow the commit style shown in recent commits.
 
 **Format:**
 - First line: Subject (50 chars max, imperative mood)

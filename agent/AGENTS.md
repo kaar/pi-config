@@ -3,6 +3,7 @@
 - Use `offset` and `limit` for ranged reads. Omit both when reading a file in full.
 - Read every file in full before editing it.
 - Use `rg` (ripgrep) instead of `grep`.
+- Use `jq` for parsing JSON files (including JSONL, with `jq -r` over each line). Do not parse JSON with `grep`, `sed`, `awk`, or ad-hoc Python.
 
 ## Editing
 - Keep edits minimal. Match only the smallest unique region needed.

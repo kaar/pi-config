@@ -78,6 +78,19 @@ Reusable, invokable capabilities. See [docs/skills.md](docs/skills.md).
 - [prompt-templates.md](docs/prompt-templates.md) - Prompt template syntax
 - [session.md](docs/session.md) - Session management
 
+## Troubleshooting
+
+### "I accidentally added newText_dummy keys. Re-applying cleanly:"
+
+This is not a Pi error. It is the model self-correcting a rejected `edit` tool call.
+
+The `edit` tool validates each item in `edits[]` with a strict schema (`additionalProperties: false`). When a model emits a stray key inside an edit object (for example `newText_dummy` alongside the real `oldText`/`newText`), the entire tool call is hard-rejected instead of ignoring the extra key. The model receives the validation error, recognizes the bogus key, narrates the message above, and retries the edit cleanly. The retry usually succeeds, so it is mostly wasted round-trips rather than a fatal failure.
+
+Notes:
+- Caused by noisy model output, not by anything you did. Stronger models trigger it less.
+- Tracked upstream in [earendil-works/pi](https://github.com/earendil-works/pi) issues [#1259](https://github.com/earendil-works/pi/issues/1259) and [#2731](https://github.com/earendil-works/pi/issues/2731).
+- [PR #5434](https://github.com/earendil-works/pi/pull/5434) drops `additionalProperties: false` from the inner edit schema so extra keys are ignored. Not yet released as of 0.79.4.
+
 ## Resources
 
 - [PI](https://pi.dev/)

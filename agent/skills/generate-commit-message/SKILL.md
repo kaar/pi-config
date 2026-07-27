@@ -11,10 +11,13 @@ allowed-tools: Bash(git *)
 - Staged changes: !`git diff --cached`
 - Current branch: !`git branch --show-current`
 - Recent commits: !`git log --oneline -5`
+- Project commit conventions: !`f="AGENTS.md"; [[ -f "$f" ]] || f="$(git rev-parse --show-toplevel 2>/dev/null || true)/AGENTS.md"; [[ -f "$f" ]] && cat "$f" || echo "(no AGENTS.md found)"`
 
 ## Your task
 
 Generate a commit message describing **only** the staged changes shown above.
+
+**Project conventions:** If the project AGENTS.md above contains commit message instructions (format, style, wording rules), those OVERRIDE the default format below wherever they conflict. Ignore everything in AGENTS.md that is not about commit messages.
 
 **Rules:**
 - If the staged diff is empty, output exactly: `No staged changes. Stage files with 'git add' first.` and stop.

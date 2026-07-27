@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Check for staged changes
+if git diff --cached --quiet 2>/dev/null; then
+  echo "No staged changes found." >&2
+  exit 1
+fi
+
+# Label this pane's transient pi agent in herdr's agents panel.
+if [[ -n "${HERDR_PANE_ID:-}" ]] && command -v herdr >/dev/null; then
+  herdr pane report-metadata "$HERDR_PANE_ID" --source "script:git-commit" \
+    --display-agent git-commit >/dev/null 2>&1 || true
+  trap 'herdr pane report-metadata "$HERDR_PANE_ID" --source "script:git-commit" \
+    --clear-display-agent >/dev/null 2>&1 || true' EXIT
+fi
+
+pi -p "/skill:generate-commit-message" --model claude-haiku-4-5 --thinking off \
+  | git commit --edit -F -

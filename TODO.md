@@ -34,4 +34,12 @@ Example would be I have two different .worktrees with the different implementati
 I'm running into where design documents and other markdown documents are formatted by breaking line lengths.
 Not sure what this is coming from. Need to investigate
 
-##
+## Agent Observer
+I would like to connect an agent to the current workflow of another agent to continue build on what that agent is currently producing or writing.
+
+You select a session to connect to.
+The new agent is listening to the whole conversation and can make continued work or monitoring of what that agent is working on.
+
+For example:
+
+read stream from <session_id> | run agent connected to that stream and use its output and a source of information/context.

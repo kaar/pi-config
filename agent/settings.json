@@ -1,5 +1,5 @@
 {
-  "defaultModel": "claude-opus-4-8",
+  "defaultModel": "claude-fable-5",
   "defaultProvider": "anthropic",
   "defaultThinkingLevel": "high",
   "hideThinkingBlock": false,

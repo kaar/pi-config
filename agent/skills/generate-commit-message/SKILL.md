@@ -23,14 +23,17 @@ Generate a commit message describing **only** the staged changes shown above.
 - If the staged diff is empty, output exactly: `No staged changes. Stage files with 'git add' first.` and stop.
 - Ignore unstaged or untracked files entirely, even if hinted at elsewhere.
 - Output ONLY the commit message text, nothing else.
-- No explanations, no tool calls, no markdown formatting.
+- Your entire response must BE the commit message. The very first character you output must be the first character of the subject line.
+- Do NOT prepend any preamble, lead-in, or acknowledgement. Never write phrases like "Based on the staged changes, here's the commit message:", "Here is the commit message:", or similar.
+- Do NOT append any trailing commentary after the commit message.
+- No explanations, no tool calls, no markdown formatting, no code fences around the message.
 - Follow the commit style shown in recent commits.
 
 **Format:**
 - First line: Subject (50 chars max, imperative mood)
 - If more detail is needed: blank line, then body
 
-**Example output:**
+**Example output** (the fences below are illustration only, do not include them):
 ```
 Add user authentication endpoint
 

@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# State for debugging: every run's pi session is kept in a dedicated
+# session dir, plus the raw model output and stderr of the last run.
+STATE_DIR="${PI_AI_COMMIT_STATE_DIR:-$HOME/.local/state/pi-ai-commit}"
+SESSION_DIR="$STATE_DIR/sessions"
+LAST_OUTPUT="$STATE_DIR/last-output.txt"
+LAST_STDERR="$STATE_DIR/last-stderr.log"
+LAST_SESSION="$STATE_DIR/last-session"
+KEEP_SESSIONS=30
+MODEL="${PI_AI_COMMIT_MODEL:-claude-opus-5}"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  pi-ai-commit                 Generate commit message for staged changes and commit
+  pi-ai-commit debug           Inspect last run: context sent to model, tool calls, output
+  pi-ai-commit debug --full    Same, without truncation
+  pi-ai-commit debug --resume  Open the last run's session interactively in pi
+  pi-ai-commit debug --export  Export the last run's session to HTML
+EOF
+  exit 1
+}
+
+last_session_file() {
+  [[ -f "$LAST_SESSION" ]] || { echo "No previous pi-ai-commit run recorded." >&2; exit 1; }
+  local f
+  f="$(cat "$LAST_SESSION")"
+  [[ -f "$f" ]] || { echo "Recorded session file missing: $f" >&2; exit 1; }
+  printf '%s\n' "$f"
+}
+
+dump_session() {
+  local session="$1" max="$2"
+  echo "Session file: $session"
+  [[ -s "$LAST_STDERR" ]] && echo "Stderr log:   $LAST_STDERR"
+  jq -r --argjson max "$max" '
+    def clip: if $max > 0 and length > $max then .[0:$max] + "\n... [truncated, use --full]" else . end;
+    def texts: if type == "string" then . else ([.[] | select(.type == "text") | .text] | join("\n")) end;
+    if .type == "session" then
+      "session id:   \(.id)\ncwd:          \(.cwd)"
+    elif .type == "model_change" then
+      "model:        \(.provider)/\(.modelId)"
+    elif .type == "thinking_level_change" then
+      "thinking:     \(.thinkingLevel)"
+    elif .type == "message" then
+      (.message |
+        if .role == "user" then
+          "\n===== USER PROMPT (expanded skill + injected context) =====\n" + (.content | texts | clip)
+        elif .role == "assistant" then
+          "\n===== ASSISTANT (\(.model // "?"), stopReason=\(.stopReason // "?")) =====\n" +
+          ([.content[] |
+            if .type == "thinking" then "[thinking]\n\(.thinking)"
+            elif .type == "text" then .text
+            elif .type == "toolCall" then "[toolCall \(.name)] \(.arguments | tojson)"
+            else "[\(.type)]" end
+          ] | join("\n") | clip)
+        elif .role == "toolResult" then
+          "\n===== TOOL RESULT (\(.toolName)\(if .isError then ", ERROR" else "" end)) =====\n" + (.content | texts | clip)
+        else
+          "\n===== \(.role) ====="
+        end)
+    else empty end
+  ' "$session"
+}
+
+debug_cmd() {
+  local session
+  session="$(last_session_file)"
+  case "${1:-}" in
+    "") dump_session "$session" 2000 ;;
+    --full) dump_session "$session" 0 ;;
+    --resume) exec pi --session "$session" --session-dir "$SESSION_DIR" ;;
+    --export)
+      (cd "$STATE_DIR" && pi --export "$session")
+      echo "HTML written to $STATE_DIR"
+      ;;
+    *) usage ;;
+  esac
+}
+
+prune_sessions() {
+  local files total
+  files="$(find "$SESSION_DIR" -maxdepth 1 -type f -name '*.jsonl' | sort)"
+  [[ -n "$files" ]] || return 0
+  total="$(printf '%s\n' "$files" | wc -l | tr -d ' ')"
+  (( total > KEEP_SESSIONS )) || return 0
+  printf '%s\n' "$files" | head -n "$((total - KEEP_SESSIONS))" | while IFS= read -r f; do
+    rm -f "$f"
+  done
+}
+
+# Emit the git context markdown that gets piped into the skill prompt.
+build_context() {
+  echo "# Staged files"
+  echo "git diff --cached --name-status"
+  echo '```sh'
+  git diff --cached --name-status
+  echo '```'
+  echo
+  echo "# Staged changes"
+  echo "git diff --cached"
+  echo '````diff'
+  git diff --cached
+  echo '````'
+  echo
+  echo "# Current branch"
+  echo "git branch --show-current"
+  echo '```sh'
+  git branch --show-current
+  echo '```'
+  echo
+  echo "# Recent commits"
+  echo "git log --oneline -5"
+  echo '```sh'
+  git log --oneline -5 2>/dev/null || echo "(no commits yet)"
+  echo '```'
+  echo
+  echo "# Project commit conventions"
+  local agents="AGENTS.md"
+  if [[ ! -f "$agents" ]]; then
+    agents="$(git rev-parse --show-toplevel 2>/dev/null || true)/AGENTS.md"
+  fi
+  if [[ -f "$agents" ]]; then
+    echo "$agents"
+    echo '````markdown'
+    cat "$agents"
+    echo '````'
+  else
+    echo "(no AGENTS.md found)"
+  fi
+}
+
+main() {
+  # Check for staged changes
+  if git diff --cached --quiet 2>/dev/null; then
+    echo "No staged changes found." >&2
+    exit 1
+  fi
+
+  # Label this pane's transient pi agent in herdr's agents panel.
+  if [[ -n "${HERDR_PANE_ID:-}" ]] && command -v herdr >/dev/null; then
+    herdr pane report-metadata "$HERDR_PANE_ID" --source "script:git-commit" \
+      --display-agent git-commit >/dev/null 2>&1 || true
+    trap 'herdr pane report-metadata "$HERDR_PANE_ID" --source "script:git-commit" \
+      --clear-display-agent >/dev/null 2>&1 || true' EXIT
+  fi
+
+  mkdir -p "$SESSION_DIR"
+
+  # The whole message is piped on stdin. It must START with the /skill:
+  # command (pi expands /skill: only at the head of the message) and the
+  # skill name must be followed by a space (everything after the first
+  # space becomes skill arguments, appended after the skill block).
+  local status=0
+  { printf '/skill:commit-message '; build_context; } |
+    pi -p --model "$MODEL" --thinking off --no-tools \
+      --session-dir "$SESSION_DIR" \
+      >"$LAST_OUTPUT" 2> >(tee "$LAST_STDERR" >&2) || status=$?
+
+  # Record the session created by this run (newest file in the dedicated dir)
+  local session
+  session="$(find "$SESSION_DIR" -maxdepth 1 -type f -name '*.jsonl' | sort | tail -n 1)"
+  [[ -n "$session" ]] && printf '%s\n' "$session" >"$LAST_SESSION"
+
+  prune_sessions
+
+  if (( status != 0 )); then
+    echo "pi failed (exit $status). Inspect with: pi-ai-commit debug" >&2
+    exit "$status"
+  fi
+
+  fmt <"$LAST_OUTPUT" | git commit --edit -F -
+}
+
+case "${1:-}" in
+  "") main ;;
+  debug) shift; debug_cmd "$@" ;;
+  -h|--help) usage ;;
+  *) usage ;;
+esac

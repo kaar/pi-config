@@ -2,6 +2,39 @@
 
 Design spec, for review. Working name: **pi-gate** (open question #1). Background research: [docs/research/no-mistakes-workflow.md](../research/no-mistakes-workflow.md).
 
+## Summary
+
+### What the workflow is for
+
+Agents generate code faster than humans can validate it. The failure mode is not "the agent can't write the feature", it is slop reaching the shared remote: subtle bugs the author-session is blind to, untested paths, missing docs, lint churn, and PRs the human has to babysit through CI. The bottleneck has moved from writing code to establishing trust in it.
+
+no-mistakes attacks this by inserting one deliberate checkpoint before anything becomes public. Its real product is a trust contract: when a branch passes the gate, it means a fresh pair of eyes reviewed the diff against the author's stated intent, targeted tests and lint actually ran, a human decided every judgment call, and the push could not have clobbered remote work. Everything else (daemon, bare gate repo, SQLite, TUI, nine steps) is infrastructure to deliver that contract outside the authoring session, restart-proof and harness-agnostic.
+
+### The underlying problem, reduced
+
+Strip the infrastructure and the problem is exactly this: **the session that wrote the code cannot be trusted to judge it, and the human cannot be trusted to catch what it missed at diff scale.** So before push you need three things:
+
+1. A **fresh-context, adversarial review** of the diff, informed by what the user actually asked for (intent), producing findings the driver cannot quietly swallow.
+2. **Mechanical verification** (tests, lint) actually executed, not claimed.
+3. A **human decision point** where judgment-shaped findings are surfaced verbatim, before the push happens.
+
+### The argument for a much simpler solution
+
+Inside pi, most of no-mistakes' machinery is solving problems we do not have. The daemon exists because no harness stays attached; pi's session is the always-attached driver. The gate remote exists to intercept pushes from any tool; we control the trigger, it is a skill invocation. SQLite and the run ledger exist for restart-proofness and multi-run attribution; a single-user chat session is its own record. Transcript-based intent inference exists because the gate runs outside the authoring session; here the intent is sitting in the conversation. The multi-provider adapter layer is void: steps run on pi.
+
+What remains is small enough to be a **single skill plus one fresh-context reviewer call**:
+
+1. Commit the work on a feature branch.
+2. Rebase on fresh upstream; stop if the diff is empty.
+3. Spawn one **fresh reviewer** (headless `pi --mode json --no-session`, or a subagent) with the diff and the intent, returning structured findings (`severity`, `action: auto-fix|ask-user|no-op`, fail closed to `ask-user`).
+4. Run the repo's own test and lint commands. Exit codes are findings.
+5. Present all findings in chat. The human approves, asks for fixes (main agent fixes, reviewer re-reviews the new diff), or skips. `ask-user` findings are relayed verbatim.
+6. Push with `--force-with-lease` after an `ls-remote` check, open the PR with `gh`, report the URL. Done; CI babysitting stays with the human or a later phase.
+
+That is maybe 150 lines of skill text and a couple of helper scripts, no state files, no executor state machine. Git is the audit trail, the chat is the round history, the PR body is written by the agent that already knows everything. It deliberately gives up: non-blocking validation in a parallel worktree, crash recovery mid-run, automated CI fixing, and the tamper-proofing that makes no-mistakes safe to point at contributor branches. For a single developer driving pi interactively, none of those buys much, and every one of them can be added later without changing the contract in step 3-5.
+
+The recommendation, therefore, is to treat this spec as two proposals: the **minimal gate** above (recommended starting point, roughly Phase 1 stripped of the ledger and worktree), and the fuller pipeline below for when the minimal gate proves the contract and starts hurting (wanting fix-round history, CI auto-fix, or gating unattended subagent work). Decide at review which one to build first (open question #0).
+
 ## Goal
 
 Reproduce the no-mistakes workflow contract inside pi, using pi-native primitives (skill + helper scripts + headless `pi` invocations), so that a branch goes through `rebase → review → test → document → lint → push → PR → CI watch` with structured findings, bounded auto-fix, and human gates in the chat, before anything reaches the remote.

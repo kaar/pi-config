@@ -15,5 +15,6 @@ if [[ -n "${HERDR_PANE_ID:-}" ]] && command -v herdr >/dev/null; then
     --clear-display-agent >/dev/null 2>&1 || true' EXIT
 fi
 
-pi -p "/skill:generate-commit-message" --model claude-haiku-4-5 --thinking off \
-  | git commit --edit -F -
+pi -p "/skill:generate-commit-message" --model claude-haiku-4-5 --thinking off |
+  fmt |
+  git commit --edit -F -

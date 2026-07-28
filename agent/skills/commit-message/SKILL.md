@@ -1,20 +1,21 @@
 ---
 name: commit-message
-description: Generate a commit message from git context provided in the same message (staged diff, branch, recent commits, project conventions). Output only the commit message text. Invoked by the pi-ai-commit wrapper script which pipes the context in on stdin.
+description: Generate a commit message from staged changes. Uses git context provided in the same message (fast path, used by the pi-ai-commit wrapper) or gathers it with scripts/create-commit-context when none is provided. Output only the commit message text.
 disable-model-invocation: true
 ---
 
 ## Input
 
-This message includes the full git context for the commit, gathered by a wrapper script:
+The git context for the commit consists of these sections:
 
 - `# Staged files`: output of `git diff --cached --name-status`
 - `# Staged changes`: the staged diff (`git diff --cached`)
 - `# Current branch`
 - `# Recent commits`: last 5 subjects, for style reference
-- `# Project commit conventions`: project AGENTS.md contents, or `(no AGENTS.md found)`
 
-Do NOT run any tools or commands. Use only the provided context.
+**If this message already contains a `# Staged files` section** (piped in by the pi-ai-commit wrapper): use that context as-is. Do NOT run any tools or commands.
+
+**Otherwise** (invoked bare inside a session): run `scripts/create-commit-context` once via bash and use its output as the context. Run no other commands.
 
 ## Your task
 
@@ -25,8 +26,8 @@ Generate a commit message describing **only** the staged changes shown in the pr
 **Rules:**
 - If the staged diff is empty, output exactly: `No staged changes. Stage files with 'git add' first.` and stop.
 - Ignore unstaged or untracked files entirely, even if hinted at elsewhere.
-- Output ONLY the commit message text, nothing else.
-- Your entire response must BE the commit message. The very first character you output must be the first character of the subject line.
+- Output ONLY the commit message text, nothing else. (A single bash call to gather context is allowed in bare mode, but emit no text around it.)
+- Your entire final response must BE the commit message. The very first character you output must be the first character of the subject line.
 - Do NOT prepend any preamble, lead-in, or acknowledgement. Never write phrases like "Based on the staged changes, here's the commit message:", "Here is the commit message:", or similar.
 - Do NOT append any trailing commentary after the commit message.
 - No explanations, no markdown formatting, no code fences around the message.

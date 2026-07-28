@@ -65,9 +65,9 @@ build_context() {
   echo
   echo "# Staged changes"
   echo "git diff ${DIFF_ARGS[*]}"
-  echo '````diff'
+  echo '```diff'
   build_staged_diff
-  echo '````'
+  echo '```'
   echo
   echo "# Current branch"
   echo "git branch --show-current"

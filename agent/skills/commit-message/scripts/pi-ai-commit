@@ -3,7 +3,7 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-# Context building lives in pi-ai-commit-context (run it standalone to
+# Context building lives in create-commit-context (run it standalone to
 # inspect what the model sees).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -16,7 +16,7 @@ fi
 # -p argument, and /skill: only expands at the head of the message.
 {
   printf '/skill:commit-message '
-  "$SCRIPT_DIR/pi-ai-commit-context"
+  "$SCRIPT_DIR/create-commit-context"
 } |
   pi -p --model claude-opus-5 --thinking off |
   fmt |

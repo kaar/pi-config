@@ -3,53 +3,9 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-# Max diff lines per file before truncation (override via env).
-MAX_DIFF_LINES="${PI_AI_COMMIT_MAX_DIFF_LINES:-200}"
-
-# Truncate stdin to MAX_DIFF_LINES lines. awk reads all input, so this is
-# safe under pipefail (head would exit early and trigger SIGPIPE).
-truncate_diff() {
-  awk -v max="$MAX_DIFF_LINES" '
-    NR <= max { print }
-    NR == max + 1 { print "... [truncated: diff exceeds " max " lines]" }
-  '
-}
-
-# Emit the staged diff file by file, truncating each file individually so
-# one huge file (e.g. a lockfile) cannot crowd out the rest.
-build_staged_diff() {
-  local file
-  while IFS= read -r -d '' file; do
-    git diff --cached -- "$file" | truncate_diff
-  done < <(git diff --cached --name-only -z)
-}
-
-build_context() {
-  echo "# Staged files"
-  echo "git diff --cached --name-status"
-  echo '```sh'
-  git diff --cached --name-status
-  echo '```'
-  echo
-  echo "# Staged changes"
-  echo "git diff --cached"
-  echo '````diff'
-  build_staged_diff
-  echo '````'
-  echo
-  echo "# Current branch"
-  echo "git branch --show-current"
-  echo '```sh'
-  git branch --show-current
-  echo '```'
-  echo
-  echo "# Recent commits"
-  echo "git log --oneline -5"
-  echo '```sh'
-  git log --oneline -5 2>/dev/null || echo "(no commits yet)"
-  echo '```'
-  echo
-}
+# Context building lives in pi-ai-commit-context (run it standalone to
+# inspect what the model sees).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if git diff --cached --quiet 2>/dev/null; then
   echo "No staged changes found." >&2
@@ -60,7 +16,7 @@ fi
 # -p argument, and /skill: only expands at the head of the message.
 {
   printf '/skill:generate-commit-message '
-  build_context
+  "$SCRIPT_DIR/pi-ai-commit-context"
 } |
   pi -p --model claude-opus-5 --thinking off |
   fmt |

@@ -9,9 +9,8 @@
 // tool calls whose path matches a staged file. The pi-ai-commit wrapper's own
 // `pi -p` sessions never run edit/write, so they are filtered out naturally.
 //
-// Usage: find-session-context [--am|--amend] [file...]
-//   With no file arguments, the staged file list is used (in amend mode the
-//   diff base is HEAD^, matching create-commit-context).
+// Usage: find-session-context [file...]
+//   With no file arguments, the staged file list is used.
 //
 // Prints nothing on stdout when no session matches, so callers can append the
 // output unconditionally. Env overrides:
@@ -43,30 +42,16 @@ function git(...args) {
 }
 
 function main() {
-  const argv = process.argv.slice(2);
-  const amend = argv[0] === "--am" || argv[0] === "--amend";
-  const fileArgs = argv.slice(amend ? 1 : 0);
+  const fileArgs = process.argv.slice(2);
 
   const repoRoot = git("rev-parse", "--show-toplevel").trim();
 
-  let stagedRel;
-  if (fileArgs.length > 0) {
-    stagedRel = fileArgs.map((f) =>
-      path.relative(repoRoot, path.resolve(f)),
-    );
-  } else {
-    const diffArgs = ["diff", "--cached", "--name-only", "-z"];
-    if (amend) {
-      let base;
-      try {
-        base = git("rev-parse", "--verify", "--quiet", "HEAD^").trim();
-      } catch {
-        base = git("hash-object", "-t", "tree", "/dev/null").trim();
-      }
-      diffArgs.splice(2, 0, base);
-    }
-    stagedRel = git(...diffArgs).split("\0").filter(Boolean);
-  }
+  const stagedRel =
+    fileArgs.length > 0
+      ? fileArgs.map((f) => path.relative(repoRoot, path.resolve(f)))
+      : git("diff", "--cached", "--name-only", "-z")
+          .split("\0")
+          .filter(Boolean);
   if (stagedRel.length === 0) {
     process.stderr.write("find-session-context: no staged files\n");
     return;

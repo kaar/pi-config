@@ -83,7 +83,10 @@ build_context() {
   echo
   # Agent sessions that edited the staged files, with user intent. Prints
   # nothing when no session matches; never let it break context generation.
-  "$SCRIPT_DIR/find-session-context" 2>/dev/null || true
+  #
+  # I has to disable it as it started to fail producing correct commit format.
+  # It could probably be fixed by improving the output from find-session-context
+  # "$SCRIPT_DIR/find-session-context" 2>/dev/null || true
 }
 
 build_context

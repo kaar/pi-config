@@ -14,6 +14,8 @@ case "${1:-}" in
   --am | --amend) AMEND=1 ;;
 esac
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # In amend mode diff against the parent of HEAD (or the empty tree for a
 # root commit) so the previous commit's changes are part of the diff.
 DIFF_ARGS=(--cached)
@@ -79,6 +81,9 @@ build_context() {
   git log --oneline -5 2>/dev/null || echo "(no commits yet)"
   echo '```'
   echo
+  # Agent sessions that edited the staged files, with user intent. Prints
+  # nothing when no session matches; never let it break context generation.
+  "$SCRIPT_DIR/find-session-context" 2>/dev/null || true
 }
 
 build_context

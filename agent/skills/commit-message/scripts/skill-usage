@@ -1,0 +1,233 @@
+#!/usr/bin/env node
+"use strict";
+
+// Reports accumulated token usage and cost for skill invocations by scanning
+// pi session transcripts (~/.pi/agent/sessions/*/*.jsonl).
+//
+// An invocation is a user message containing `<skill name="...">`. All
+// assistant messages that follow it — up to the next user message — are
+// attributed to that invocation (toolResult messages do not end it, so the
+// bare-mode context-gathering bash call is included). Every assistant
+// message carries a `usage` block with token counts and dollar cost, which
+// is what gets summed.
+//
+// Usage: skill-usage [--json] [skill-name...]
+//   Default skill names: commit-message generate-commit-message
+//   (the latter is this skill's pre-rename name, kept for full history)
+//
+// Env overrides:
+//   PI_SESSIONS_DIR  sessions root (default ~/.pi/agent/sessions)
+
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+const DEFAULT_SKILLS = ["commit-message", "generate-commit-message"];
+
+const args = process.argv.slice(2);
+const json = args.includes("--json");
+const skillNames = args.filter((a) => a !== "--json");
+const skills = skillNames.length > 0 ? skillNames : DEFAULT_SKILLS;
+
+const sessionsDir =
+  process.env.PI_SESSIONS_DIR ||
+  path.join(os.homedir(), ".pi", "agent", "sessions");
+
+const markers = skills.map((s) => `<skill name="${s}"`);
+// Inside the JSONL the quotes are JSON-escaped; used for the cheap file-level
+// pre-filter before parsing lines.
+const rawMarkers = markers.map((m) => JSON.stringify(m).slice(1, -1));
+
+function messageText(message) {
+  const c = message.content;
+  if (typeof c === "string") return c;
+  if (!Array.isArray(c)) return "";
+  return c
+    .filter((p) => p && p.type === "text" && typeof p.text === "string")
+    .map((p) => p.text)
+    .join("\n");
+}
+
+function listSessionFiles(root) {
+  let dirs;
+  try {
+    dirs = fs.readdirSync(root, { withFileTypes: true });
+  } catch (err) {
+    console.error(`skill-usage: cannot read ${root}: ${err.message}`);
+    process.exit(1);
+  }
+  const files = [];
+  for (const d of dirs) {
+    if (!d.isDirectory()) continue;
+    const dir = path.join(root, d.name);
+    for (const f of fs.readdirSync(dir)) {
+      if (f.endsWith(".jsonl")) files.push(path.join(dir, f));
+    }
+  }
+  return files;
+}
+
+// One entry per invocation:
+// { timestamp, sessionFile, model, cost, input, output, cacheRead,
+//   cacheWrite, totalTokens, responses }
+const invocations = [];
+
+for (const file of listSessionFiles(sessionsDir)) {
+  let text;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    continue;
+  }
+  if (!rawMarkers.some((m) => text.includes(m))) continue;
+
+  let current = null; // invocation being accumulated
+  let model = null;
+
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let rec;
+    try {
+      rec = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (rec.type === "model_change") {
+      model = rec.modelId || model;
+      continue;
+    }
+    if (rec.type !== "message" || !rec.message) continue;
+    const role = rec.message.role;
+
+    if (role === "user") {
+      const isInvocation = markers.some((m) =>
+        messageText(rec.message).includes(m)
+      );
+      current = isInvocation
+        ? {
+            timestamp: rec.timestamp || null,
+            sessionFile: file,
+            model,
+            cost: 0,
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            responses: 0,
+          }
+        : null; // any other user message ends the invocation
+      if (isInvocation) invocations.push(current);
+      continue;
+    }
+
+    if (role === "assistant" && current) {
+      const u = rec.message.usage || {};
+      current.model = rec.message.model || current.model;
+      current.cost += (u.cost && u.cost.total) || 0;
+      current.input += u.input || 0;
+      current.output += u.output || 0;
+      current.cacheRead += u.cacheRead || 0;
+      current.cacheWrite += u.cacheWrite || 0;
+      current.totalTokens += u.totalTokens || 0;
+      current.responses += 1;
+    }
+    // toolResult messages fall through: they do not end the invocation
+  }
+}
+
+invocations.sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
+
+function sum(list) {
+  const t = {
+    invocations: list.length,
+    cost: 0,
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+  };
+  for (const inv of list) {
+    t.cost += inv.cost;
+    t.input += inv.input;
+    t.output += inv.output;
+    t.cacheRead += inv.cacheRead;
+    t.cacheWrite += inv.cacheWrite;
+    t.totalTokens += inv.totalTokens;
+  }
+  return t;
+}
+
+function groupBy(list, keyFn) {
+  const groups = new Map();
+  for (const inv of list) {
+    const k = keyFn(inv);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(inv);
+  }
+  return groups;
+}
+
+const total = sum(invocations);
+
+if (json) {
+  const byMonth = {};
+  for (const [k, v] of groupBy(invocations, (i) =>
+    String(i.timestamp).slice(0, 7)
+  ))
+    byMonth[k] = sum(v);
+  const byModel = {};
+  for (const [k, v] of groupBy(invocations, (i) => i.model || "unknown"))
+    byModel[k] = sum(v);
+  // process.stdout.write instead of console.log + process.exit, which can
+  // truncate large piped output before it flushes
+  process.stdout.write(
+    JSON.stringify({ skills, total, byMonth, byModel, invocations }, null, 2) +
+      "\n"
+  );
+  return;
+}
+
+const usd = (n) => `$${n.toFixed(4)}`;
+const num = (n) => n.toLocaleString("en-US");
+
+if (invocations.length === 0) {
+  console.log(`No invocations of ${skills.join(", ")} found in ${sessionsDir}`);
+  process.exit(0);
+}
+
+const first = String(invocations[0].timestamp).slice(0, 10);
+const last = String(invocations[invocations.length - 1].timestamp).slice(0, 10);
+
+console.log(`Skill usage: ${skills.join(", ")}`);
+console.log(`Sessions dir: ${sessionsDir}`);
+console.log(`Period: ${first} .. ${last}`);
+console.log("");
+console.log(`Invocations : ${num(total.invocations)}`);
+console.log(`Total cost  : ${usd(total.cost)}`);
+console.log(
+  `Tokens      : ${num(total.totalTokens)} total ` +
+    `(in ${num(total.input)}, out ${num(total.output)}, ` +
+    `cache read ${num(total.cacheRead)}, cache write ${num(total.cacheWrite)})`
+);
+
+function printTable(title, groups) {
+  console.log("");
+  console.log(title);
+  const keys = [...groups.keys()].sort();
+  const width = Math.max(...keys.map((k) => k.length), 5);
+  for (const k of keys) {
+    const t = sum(groups.get(k));
+    console.log(
+      `  ${k.padEnd(width)}  ${String(t.invocations).padStart(5)} inv  ` +
+        `${usd(t.cost).padStart(10)}  ${num(t.totalTokens).padStart(12)} tok`
+    );
+  }
+}
+
+printTable(
+  "By month:",
+  groupBy(invocations, (i) => String(i.timestamp).slice(0, 7))
+);
+printTable("By model:", groupBy(invocations, (i) => i.model || "unknown"));

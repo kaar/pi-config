@@ -37,6 +37,7 @@ Generate a commit message describing **only** the staged changes shown in the pr
 **Format:**
 - First line: Subject (50 chars max, imperative mood)
 - If more detail is needed: blank line, then body
+- Hard-wrap body lines at 72 characters. The message is committed verbatim, so wrap the lines yourself.
 
 **Example output** (the fences below are illustration only, do not include them):
 ```

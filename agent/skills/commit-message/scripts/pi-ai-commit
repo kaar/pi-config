@@ -32,5 +32,4 @@ fi
   "$SCRIPT_DIR/create-commit-context" ${AMEND:+"$AMEND"}
 } |
   pi -p --model claude-opus-5 --thinking off |
-  fmt |
   git commit --edit ${AMEND:+"$AMEND"} -F -

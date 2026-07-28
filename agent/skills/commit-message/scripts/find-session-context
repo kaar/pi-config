@@ -193,7 +193,11 @@ function scanPiSessions(repoRoot, stagedAbs, minMtime) {
 
       if (msg.role === "user") {
         const text = textOfContent(msg.content).trim();
-        if (text) session.prompts.push({ text, prior: priorReply });
+        // Skill invocations expand into "<skill name=...>" blocks (typed as
+        // "/skill:..."); they are machinery, not intent.
+        if (text && !/^<skill[\s>]/.test(text) && !text.startsWith("/skill:")) {
+          session.prompts.push({ text, prior: priorReply });
+        }
         priorReply = null;
       } else if (msg.role === "assistant" && Array.isArray(msg.content)) {
         const text = textOfContent(msg.content).trim();

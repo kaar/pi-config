@@ -41,7 +41,7 @@ truncate_diff() {
 build_staged_diff() {
   local file
   while IFS= read -r -d '' file; do
-    git diff "${DIFF_ARGS[@]}" -- ":(top)$file" | truncate_diff
+    git diff "${DIFF_ARGS[@]}" -- ":(top,literal)$file" | truncate_diff
   done < <(git diff "${DIFF_ARGS[@]}" --name-only -z)
 }
 

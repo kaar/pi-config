@@ -19,6 +19,8 @@
 //   PI_AI_COMMIT_MAX_SESSIONS          sessions reported, most recent first (3)
 //   PI_AI_COMMIT_MAX_PROMPTS           user prompts shown per session (5)
 //   PI_AI_COMMIT_MAX_PROMPT_CHARS      truncation length per prompt (400)
+//   PI_AI_COMMIT_MAX_REPLY_CHARS       truncation length for the assistant
+//                                      reply preceding each prompt (700)
 
 const fs = require("fs");
 const os = require("os");
@@ -29,6 +31,7 @@ const MAX_AGE_DAYS = envInt("PI_AI_COMMIT_SESSION_MAX_AGE_DAYS", 14);
 const MAX_SESSIONS = envInt("PI_AI_COMMIT_MAX_SESSIONS", 3);
 const MAX_PROMPTS = envInt("PI_AI_COMMIT_MAX_PROMPTS", 5);
 const MAX_PROMPT_CHARS = envInt("PI_AI_COMMIT_MAX_PROMPT_CHARS", 400);
+const MAX_REPLY_CHARS = envInt("PI_AI_COMMIT_MAX_REPLY_CHARS", 700);
 
 function envInt(name, fallback) {
   const v = parseInt(process.env[name] ?? "", 10);
@@ -187,6 +190,10 @@ function scanPiSessions(repoRoot, stagedAbs, minMtime) {
       lastEditTs: 0,
     };
 
+    // The assistant text a user prompt replies to; users react to the end of
+    // a reply, so only the tail is kept.
+    let priorReply = null;
+
     for (let i = 1; i < lines.length; i++) {
       if (!lines[i]) continue;
       let entry;
@@ -201,8 +208,11 @@ function scanPiSessions(repoRoot, stagedAbs, minMtime) {
 
       if (msg.role === "user") {
         const text = textOfContent(msg.content).trim();
-        if (text) session.prompts.push(text);
+        if (text) session.prompts.push({ text, prior: priorReply });
+        priorReply = null;
       } else if (msg.role === "assistant" && Array.isArray(msg.content)) {
+        const text = textOfContent(msg.content).trim();
+        if (text) priorReply = text.slice(-MAX_REPLY_CHARS * 4);
         for (const block of msg.content) {
           if (block?.type !== "toolCall") continue;
           if (block.name !== "edit" && block.name !== "write") continue;
@@ -252,6 +262,11 @@ function scanClaudeSessions(repoRoot, stagedAbs, minMtime) {
       lastEditTs: 0,
     };
 
+    // Tail of the assistant text preceding each user prompt. A turn spans
+    // several assistant entries; consecutive text chunks are accumulated.
+    let priorReply = null;
+    let replyOpen = false;
+
     for (const line of raw.split("\n")) {
       if (!line) continue;
       let entry;
@@ -266,13 +281,25 @@ function scanClaudeSessions(repoRoot, stagedAbs, minMtime) {
       }
 
       if (entry.type === "user" && !entry.isSidechain && !entry.isMeta) {
+        replyOpen = false;
         const text = textOfContent(entry.message?.content).trim();
         // Skip injected content: system reminders, task notifications,
         // command wrappers — real prompts don't start with markup.
         if (text && !text.startsWith("<") && !text.startsWith("[")) {
-          session.prompts.push(text);
+          session.prompts.push({ text, prior: priorReply });
+          priorReply = null;
         }
       } else if (entry.type === "assistant") {
+        // Sidechain (subagent) edits count for attribution, but their text
+        // is agent-to-agent chatter, not a reply the user responded to.
+        const text = entry.isSidechain
+          ? ""
+          : textOfContent(entry.message?.content).trim();
+        if (text) {
+          priorReply = replyOpen ? priorReply + "\n" + text : text;
+          priorReply = priorReply.slice(-MAX_REPLY_CHARS * 4);
+          replyOpen = true;
+        }
         for (const block of entry.message?.content ?? []) {
           if (block?.type !== "tool_use" || !editTools.has(block.name)) {
             continue;
@@ -296,6 +323,13 @@ function scanClaudeSessions(repoRoot, stagedAbs, minMtime) {
 function truncate(text, max) {
   const oneline = text.replace(/\s+/g, " ").trim();
   return oneline.length <= max ? oneline : oneline.slice(0, max) + " …";
+}
+
+// Assistant replies are truncated from the end: the user reacts to the tail
+// of a reply (recommendation, question), not its opening.
+function truncateTail(text, max) {
+  const oneline = text.replace(/\s+/g, " ").trim();
+  return oneline.length <= max ? oneline : "… " + oneline.slice(-max);
 }
 
 // Keep the opening prompt (usually the core intent) plus the most recent
@@ -325,11 +359,14 @@ function render(sessions) {
     out.push(`Edited staged files: ${[...s.files].sort().join(", ")}`);
     const { shown, skipped } = selectPrompts(s.prompts);
     if (shown.length > 0) {
-      out.push("User prompts:");
+      out.push("Conversation (each user prompt with the assistant reply it responds to):");
       shown.forEach((p, i) => {
-        out.push(`> ${truncate(p, MAX_PROMPT_CHARS)}`);
+        if (p.prior) {
+          out.push(`> Assistant: ${truncateTail(p.prior, MAX_REPLY_CHARS)}`);
+        }
+        out.push(`> User: ${truncate(p.text, MAX_PROMPT_CHARS)}`);
         if (skipped > 0 && i === 0) {
-          out.push(`> [… ${skipped} more prompt(s) omitted …]`);
+          out.push(`> [… ${skipped} more exchange(s) omitted …]`);
         }
       });
     }

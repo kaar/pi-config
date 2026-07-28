@@ -226,6 +226,47 @@ function printTable(title, groups) {
   }
 }
 
+{
+  // Weekly average cost per call, oldest first, with a bar scaled to the
+  // most expensive week. Zero-call weeks print as blank rows so the
+  // timeline stays linear.
+  const DAY = 86400000;
+  const weekStart = (ts) => {
+    const ms = Date.parse(ts);
+    const dow = (new Date(ms).getUTCDay() + 6) % 7; // Monday = 0
+    const d = new Date(ms - dow * DAY);
+    d.setUTCHours(0, 0, 0, 0);
+    return d.getTime();
+  };
+  const byWeek = groupBy(invocations, (i) => String(weekStart(i.timestamp)));
+  const starts = [...byWeek.keys()].map(Number).sort((a, b) => a - b);
+  const rows = [];
+  for (let wk = starts[0]; wk <= starts[starts.length - 1]; wk += 7 * DAY) {
+    const t = sum(byWeek.get(String(wk)) || []);
+    rows.push({
+      week: new Date(wk).toISOString().slice(0, 10),
+      inv: t.invocations,
+      cost: t.cost,
+      avg: t.invocations ? t.cost / t.invocations : 0,
+    });
+  }
+  const maxAvg = Math.max(...rows.map((r) => r.avg));
+  const BAR = 30;
+  console.log("");
+  console.log("Average cost per call, by week:");
+  for (const r of rows) {
+    if (r.inv === 0) {
+      console.log(`  ${r.week}      -`);
+      continue;
+    }
+    const bar = "#".repeat(Math.max(1, Math.round((r.avg / maxAvg) * BAR)));
+    console.log(
+      `  ${r.week}  ${String(r.inv).padStart(3)} inv  ` +
+        `avg ${usd(r.avg).padStart(8)}  ${bar}`
+    );
+  }
+}
+
 printTable(
   "By month:",
   groupBy(invocations, (i) => String(i.timestamp).slice(0, 7))

@@ -16,10 +16,10 @@
 // output unconditionally. Env overrides:
 //   PI_AI_COMMIT_SESSION_MAX_AGE_DAYS  session files older than this are skipped (14)
 //   PI_AI_COMMIT_MAX_SESSIONS          sessions reported, most recent first (3)
-//   PI_AI_COMMIT_MAX_PROMPTS           user prompts shown per session (5)
+//   PI_AI_COMMIT_MAX_PROMPTS           user prompts shown per session (3)
 //   PI_AI_COMMIT_MAX_PROMPT_CHARS      truncation length per prompt (400)
 //   PI_AI_COMMIT_MAX_REPLY_CHARS       truncation length for the assistant
-//                                      reply preceding each prompt (700)
+//                                      reply preceding each prompt (400)
 
 const fs = require("fs");
 const os = require("os");
@@ -28,9 +28,9 @@ const { execFileSync } = require("child_process");
 
 const MAX_AGE_DAYS = envInt("PI_AI_COMMIT_SESSION_MAX_AGE_DAYS", 14);
 const MAX_SESSIONS = envInt("PI_AI_COMMIT_MAX_SESSIONS", 3);
-const MAX_PROMPTS = envInt("PI_AI_COMMIT_MAX_PROMPTS", 5);
+const MAX_PROMPTS = envInt("PI_AI_COMMIT_MAX_PROMPTS", 3);
 const MAX_PROMPT_CHARS = envInt("PI_AI_COMMIT_MAX_PROMPT_CHARS", 400);
-const MAX_REPLY_CHARS = envInt("PI_AI_COMMIT_MAX_REPLY_CHARS", 700);
+const MAX_REPLY_CHARS = envInt("PI_AI_COMMIT_MAX_REPLY_CHARS", 400);
 
 function envInt(name, fallback) {
   const v = parseInt(process.env[name] ?? "", 10);
@@ -128,6 +128,23 @@ function underRoot(cwd, repoRoot) {
   return cwd === repoRoot || (cwd && cwd.startsWith(repoRoot + "/"));
 }
 
+// Bare approvals ("Yes, fix it", "commit", "next") carry no intent of their
+// own; they get folded into the assistant reply they approve.
+function isAcknowledgment(text) {
+  return /^(yes|yeah|yep|ok(ay)?|sure|go( ahead)?|do (it|that)|fix (it|that)|proceed|continue|next|commit|approved?|lgtm|sounds good|looks good|ship it)\b.{0,15}$/i.test(
+    text,
+  );
+}
+
+// Matches "commit" as the git subcommand (allowing option args like -C x),
+// without firing on e.g. `git add commit-message/...`.
+function isGitCommitCommand(command) {
+  return (
+    typeof command === "string" &&
+    /\bgit\s+(?:-[a-zA-Z]\s+\S+\s+|--?\S+\s+)*commit\b/.test(command)
+  );
+}
+
 function textOfContent(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -178,6 +195,9 @@ function scanPiSessions(repoRoot, stagedAbs, minMtime) {
     // The assistant text a user prompt replies to; users react to the end of
     // a reply, so only the tail is kept.
     let priorReply = null;
+    // Tool-call ids of pending `git commit` commands. When one succeeds, the
+    // exchanges so far describe committed work, not the staged changes.
+    const pendingCommits = new Set();
 
     for (let i = 1; i < lines.length; i++) {
       if (!lines[i]) continue;
@@ -196,14 +216,26 @@ function scanPiSessions(repoRoot, stagedAbs, minMtime) {
         // Skill invocations expand into "<skill name=...>" blocks (typed as
         // "/skill:..."); they are machinery, not intent.
         if (text && !/^<skill[\s>]/.test(text) && !text.startsWith("/skill:")) {
-          session.prompts.push({ text, prior: priorReply });
+          session.prompts.push({
+            text,
+            prior: priorReply,
+            ack: isAcknowledgment(text),
+          });
         }
         priorReply = null;
+      } else if (msg.role === "toolResult") {
+        if (pendingCommits.delete(msg.toolCallId) && !msg.isError) {
+          session.prompts.length = 0;
+        }
       } else if (msg.role === "assistant" && Array.isArray(msg.content)) {
         const text = textOfContent(msg.content).trim();
         if (text) priorReply = text.slice(-MAX_REPLY_CHARS * 4);
         for (const block of msg.content) {
           if (block?.type !== "toolCall") continue;
+          if (block.name === "bash" && isGitCommitCommand(block.arguments?.command)) {
+            pendingCommits.add(block.id);
+            continue;
+          }
           if (block.name !== "edit" && block.name !== "write") continue;
           const p = block.arguments?.path;
           if (!p) continue;
@@ -255,6 +287,9 @@ function scanClaudeSessions(repoRoot, stagedAbs, minMtime) {
     // several assistant entries; consecutive text chunks are accumulated.
     let priorReply = null;
     let replyOpen = false;
+    // Tool-use ids of pending `git commit` commands; a success clears the
+    // exchanges so far (they describe committed work, not staged changes).
+    const pendingCommits = new Set();
 
     for (const line of raw.split("\n")) {
       if (!line) continue;
@@ -271,11 +306,24 @@ function scanClaudeSessions(repoRoot, stagedAbs, minMtime) {
 
       if (entry.type === "user" && !entry.isSidechain && !entry.isMeta) {
         replyOpen = false;
-        const text = textOfContent(entry.message?.content).trim();
+        const content = entry.message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block?.type !== "tool_result") continue;
+            if (pendingCommits.delete(block.tool_use_id) && !block.is_error) {
+              session.prompts.length = 0;
+            }
+          }
+        }
+        const text = textOfContent(content).trim();
         // Skip injected content: system reminders, task notifications,
         // command wrappers — real prompts don't start with markup.
         if (text && !text.startsWith("<") && !text.startsWith("[")) {
-          session.prompts.push({ text, prior: priorReply });
+          session.prompts.push({
+            text,
+            prior: priorReply,
+            ack: isAcknowledgment(text),
+          });
           priorReply = null;
         }
       } else if (entry.type === "assistant") {
@@ -290,9 +338,12 @@ function scanClaudeSessions(repoRoot, stagedAbs, minMtime) {
           replyOpen = true;
         }
         for (const block of entry.message?.content ?? []) {
-          if (block?.type !== "tool_use" || !editTools.has(block.name)) {
+          if (block?.type !== "tool_use") continue;
+          if (block.name === "Bash" && isGitCommitCommand(block.input?.command)) {
+            pendingCommits.add(block.id);
             continue;
           }
+          if (!editTools.has(block.name)) continue;
           const p = block.input?.file_path ?? block.input?.notebook_path;
           if (!p) continue;
           const rel = stagedAbs.get(path.resolve(p));
@@ -350,10 +401,18 @@ function render(sessions) {
     if (shown.length > 0) {
       out.push("Conversation (each user prompt with the assistant reply it responds to):");
       shown.forEach((p, i) => {
-        if (p.prior) {
-          out.push(`> Assistant: ${truncateTail(p.prior, MAX_REPLY_CHARS)}`);
+        if (p.ack && p.prior) {
+          // A bare approval; the intent lives in the reply it approves.
+          out.push(
+            `> Assistant: ${truncateTail(p.prior, MAX_REPLY_CHARS)}` +
+              ` — User approved: "${truncate(p.text, 60)}"`,
+          );
+        } else {
+          if (p.prior) {
+            out.push(`> Assistant: ${truncateTail(p.prior, MAX_REPLY_CHARS)}`);
+          }
+          out.push(`> User: ${truncate(p.text, MAX_PROMPT_CHARS)}`);
         }
-        out.push(`> User: ${truncate(p.text, MAX_PROMPT_CHARS)}`);
         if (skipped > 0 && i === 0) {
           out.push(`> [… ${skipped} more exchange(s) omitted …]`);
         }

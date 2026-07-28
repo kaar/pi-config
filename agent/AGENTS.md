@@ -51,4 +51,5 @@
 - Prefer `$(cmd)` over backticks for command substitution.
 - Use `mktemp` for temp files; clean up with `trap 'rm -rf "$tmp"' EXIT`.
 - Use `command -v foo >/dev/null` to check for a binary (not `which`).
+- Prefer bash parameter expansion over `sed` for simple string substitution: `${var//search/replace}` instead of `sed 's/search/replace/g' <<<"$var"` [SC2001].
 - Validate `cd` calls or rely on `errexit`; never `cd somewhere && do_stuff` without checking.

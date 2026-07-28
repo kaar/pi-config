@@ -3,6 +3,27 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+# Max diff lines per file before truncation (override via env).
+MAX_DIFF_LINES="${PI_AI_COMMIT_MAX_DIFF_LINES:-200}"
+
+# Truncate stdin to MAX_DIFF_LINES lines. awk reads all input, so this is
+# safe under pipefail (head would exit early and trigger SIGPIPE).
+truncate_diff() {
+  awk -v max="$MAX_DIFF_LINES" '
+    NR <= max { print }
+    NR == max + 1 { print "... [truncated: diff exceeds " max " lines]" }
+  '
+}
+
+# Emit the staged diff file by file, truncating each file individually so
+# one huge file (e.g. a lockfile) cannot crowd out the rest.
+build_staged_diff() {
+  local file
+  while IFS= read -r -d '' file; do
+    git diff --cached -- "$file" | truncate_diff
+  done < <(git diff --cached --name-only -z)
+}
+
 build_context() {
   echo "# Staged files"
   echo "git diff --cached --name-status"
@@ -13,7 +34,7 @@ build_context() {
   echo "# Staged changes"
   echo "git diff --cached"
   echo '````diff'
-  git diff --cached
+  build_staged_diff
   echo '````'
   echo
   echo "# Current branch"

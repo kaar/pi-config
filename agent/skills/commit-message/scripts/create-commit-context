@@ -5,6 +5,22 @@ set -o pipefail
 
 # Emits the git context that pi-ai-commit feeds to the model.
 # Run standalone to inspect the output.
+#
+# With --am/--amend, the diff is taken against HEAD^ so it includes the
+# previous commit's changes (the ones being amended) plus staged changes.
+
+AMEND=0
+case "${1:-}" in
+  --am | --amend) AMEND=1 ;;
+esac
+
+# In amend mode diff against the parent of HEAD (or the empty tree for a
+# root commit) so the previous commit's changes are part of the diff.
+DIFF_ARGS=(--cached)
+if [[ "$AMEND" -eq 1 ]]; then
+  BASE="$(git rev-parse --verify --quiet HEAD^ || git hash-object -t tree /dev/null)"
+  DIFF_ARGS+=("$BASE")
+fi
 
 # Max diff lines per file before truncation (override via env).
 MAX_DIFF_LINES="${PI_AI_COMMIT_MAX_DIFF_LINES:-200}"
@@ -23,19 +39,30 @@ truncate_diff() {
 build_staged_diff() {
   local file
   while IFS= read -r -d '' file; do
-    git diff --cached -- ":(top)$file" | truncate_diff
-  done < <(git diff --cached --name-only -z)
+    git diff "${DIFF_ARGS[@]}" -- ":(top)$file" | truncate_diff
+  done < <(git diff "${DIFF_ARGS[@]}" --name-only -z)
 }
 
 build_context() {
+  if [[ "$AMEND" -eq 1 ]]; then
+    echo "# Amending previous commit"
+    echo "The diff below combines the previous commit's changes with the staged changes."
+    echo
+    echo "# Previous commit message"
+    echo "git log -1 --format=%B"
+    echo '```'
+    git log -1 --format=%B
+    echo '```'
+    echo
+  fi
   echo "# Staged files"
-  echo "git diff --cached --name-status"
+  echo "git diff ${DIFF_ARGS[*]} --name-status"
   echo '```sh'
-  git diff --cached --name-status
+  git diff "${DIFF_ARGS[@]}" --name-status
   echo '```'
   echo
   echo "# Staged changes"
-  echo "git diff --cached"
+  echo "git diff ${DIFF_ARGS[*]}"
   echo '````diff'
   build_staged_diff
   echo '````'

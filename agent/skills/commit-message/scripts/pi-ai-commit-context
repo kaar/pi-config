@@ -23,7 +23,7 @@ truncate_diff() {
 build_staged_diff() {
   local file
   while IFS= read -r -d '' file; do
-    git diff --cached -- "$file" | truncate_diff
+    git diff --cached -- ":(top)$file" | truncate_diff
   done < <(git diff --cached --name-only -z)
 }
 

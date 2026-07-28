@@ -57,7 +57,7 @@ Reusable, invokable capabilities. See [docs/skills.md](docs/skills.md).
 
 ### Custom Skills
 
-- **generate-commit-message** - Generates a commit message from staged changes
+- **commit-message** - Generates a commit message from staged changes (used by the pi-ai-commit wrapper script)
 - **review-staged-changes** - Reviews staged changes for bugs, security issues, and error handling gaps (P0-P3 priority)
 
 

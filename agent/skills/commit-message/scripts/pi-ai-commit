@@ -15,7 +15,7 @@ fi
 # The skill command must lead the message: pi prepends piped stdin to any
 # -p argument, and /skill: only expands at the head of the message.
 {
-  printf '/skill:generate-commit-message '
+  printf '/skill:commit-message '
   "$SCRIPT_DIR/pi-ai-commit-context"
 } |
   pi -p --model claude-opus-5 --thinking off |

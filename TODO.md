@@ -43,3 +43,17 @@ The new agent is listening to the whole conversation and can make continued work
 For example:
 
 read stream from <session_id> | run agent connected to that stream and use its output and a source of information/context.
+
+
+
+## Extensions and Skill replacements
+ogulcancelik removed the pi web plugin with a skill. I would like to try that out instead of using the extension.
+
+There are also some other extensions that are interesting like `pi-session-recall`
+- https://github.com/ogulcancelik/pi-extensions
+- https://github.com/ogulcancelik/agent-skills
+
+
+## /recap
+
+I would like a similar skill in Pi as clauds recap feature

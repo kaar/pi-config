@@ -1,12 +1,23 @@
 {
-  "defaultModel": "claude-fable-5",
-  "defaultProvider": "anthropic",
+  "defaultModel": "gpt-5.6-terra",
+  "defaultProvider": "github-copilot",
   "defaultThinkingLevel": "high",
   "hideThinkingBlock": false,
-  "lastChangelogVersion": "0.82.1",
+  "lastChangelogVersion": "0.83.0",
   "packages": [
     "npm:pi-web-access",
     "git:github.com/HazAT/pi-interactive-subagents"
   ],
-  "theme": "dark"
+  "theme": "dark",
+  "enabledModels": [
+    "anthropic/claude-fable-5",
+    "anthropic/claude-opus-4-8",
+    "anthropic/claude-opus-5",
+    "anthropic/claude-sonnet-5",
+    "github-copilot/claude-sonnet-5",
+    "github-copilot/gpt-5.6-terra",
+    "github-copilot/gpt-5.6-luna",
+    "github-copilot/gemini-3.5-flash",
+    "github-copilot/claude-haiku-4.5"
+  ]
 }

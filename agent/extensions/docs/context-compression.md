@@ -43,7 +43,7 @@ These invariants are the design; the compressors are replaceable details.
 | Detect provider, auth mode, endpoint shape | Not applicable. Pi abstracts the provider. |
 | Proxy deployment, wrap CLIs, supervisors | Drop a `.ts` file in `~/.pi/agent/extensions/`. |
 
-The one Headroom problem that does carry over: **prompt-cache safety requires byte-stable history**. Since `context` fires before every LLM call and rewrites the whole array each time, the compressed form of a given tool result must be identical on every subsequent call. Determinism plus memoization handles this (see Invariants).
+The one Headroom problem that does carry over: **prompt-cache safety requires byte-stable history**. Since `context` fires before every LLM call and rebuilds the whole array from session originals each time, the handler recompresses every tool result from scratch on every call. Byte-stability therefore requires each compressor to be a pure function of the tool result's own bytes; anything conversation-dependent (latest user message, live context usage) produces different bytes after a restart and busts the cache. The in-memory memo (keyed by `toolCallId`) makes this cheap within a session; determinism makes it hold across restart (see Invariants).
 
 ## Architecture
 
@@ -52,7 +52,7 @@ context event (before every LLM call)
   │
   ├─ walk messages; for each toolResult message:
   │    │
-  │    ├─ cache hit on (entryId, contentHash)?  → substitute memoized bytes
+  │    ├─ cache hit on (toolCallId, contentHash)?  → substitute memoized bytes
   │    │
   │    └─ miss (first time this result is sent):
   │         ├─ size gate: content < threshold → passthrough, memoize as-is
@@ -87,7 +87,7 @@ Port the algorithms, not the code. All are deterministic and dependency-free.
 **Detector** (~100 lines). Ordered checks on the text content: parseable JSON with an array ≥ 20 items → json-array; ≥ 30% of lines match timestamp/level prefixes → log; ripgrep/grep `path:line:` shape → search; unified diff headers → diff; else passthrough.
 
 **JsonArrayCrusher** (SmartCrusher-lite, ~400 lines). For arrays of similar objects:
-- Always keep: first 3 and last 2 items, any item containing error/failure indicators, numeric outliers (> 2 sigma on numeric fields), items matching keywords from the latest user message.
+- Always keep: first 3 and last 2 items, any item containing error/failure indicators, numeric outliers (> 2 sigma on numeric fields). Selection depends only on the array's own bytes, never on the conversation (see Invariant 2). Do not port Headroom's query-relevance ranking: it makes output depend on conversation position, which breaks determinism and the prompt cache after restart.
 - Dedupe: items identical after nulling volatile fields (timestamps, ids) collapse to one representative plus a count.
 - Summarize the elided remainder: item count, per-field type/range/cardinality digest.
 - Emit as compact JSON with an `_elided` summary entry carrying the marker.
@@ -105,11 +105,11 @@ Explicitly not ported:
 
 ## Invariants (enforced, with tests)
 
-1. **First-send-freeze**: the substituted bytes for a given session entry are computed once and never change for the life of the session (in-memory memo keyed by entryId + content hash). On restart the memo is empty, but recomputation is deterministic, so the bytes come out identical and the provider cache prefix survives. A `COMPRESSOR_VERSION` constant is baked into the memo key; bumping it is a deliberate one-time cache bust.
-2. **Determinism**: no `Date.now()`, no randomness, no dependence on iteration order of anything unordered. Property test: compress(x) === compress(x) across runs.
+1. **First-send-freeze**: the substituted bytes for a given tool result are computed once and never change for the life of the session (in-memory memo keyed by toolCallId + content hash). The `context` event exposes messages, not session entries, so the key is `toolCallId`, not an entry id; `toolCallId` is unique per call, and the content hash is a cheap guard. On restart the memo is empty, but recomputation is deterministic, so the bytes come out identical and the provider cache prefix survives. A `COMPRESSOR_VERSION` constant is baked into the memo key; bumping it is a deliberate one-time cache bust.
+2. **Determinism**: every compressor is a pure function of `(contentBytes, COMPRESSOR_VERSION)`. No `Date.now()`, no randomness, no dependence on iteration order of anything unordered, no dependence on conversation position (latest user message) or live model state (`getContextUsage()`), and no wall-clock time budgeting. Any of those would make recomputation after restart produce different bytes and bust the cache. This is why Headroom's query-relevance ranking and time-budget fail-open are not ported. Property test: `compress(x) === compress(x)` within a run and across separate processes.
 3. **Shrink-or-passthrough**: estimated tokens (chars/4) must drop ≥ 20%, else the original is sent. Compression overhead below ~2KB content is never worth it; size-gate first.
-4. **Never touch**: user messages, assistant messages, thinking blocks, system prompt, images, custom extension messages. Only `toolResult` content blocks of type `text`.
-5. **Fail open**: every compressor call wrapped; any throw logs to a debug file and passes the original through. A circuit breaker (3 consecutive failures → passthrough for the session) copies Headroom's pipeline guard.
+4. **Never touch**: user messages, assistant messages, thinking blocks, system prompt, images, custom extension messages. Only `toolResult` content blocks of type `text`. Never drop or reorder a `toolResult` and never remove image blocks: tool_use/tool_result pairing must stay intact for providers that validate it. Compress `text` blocks in place.
+5. **Fail open**: every compressor call wrapped; any throw logs to a debug file and passes the original through. A circuit breaker (3 consecutive failures → passthrough for the session) copies Headroom's pipeline guard. The breaker only affects results not yet memoized, so tripping it never un-freezes an already-compressed prefix; it just stops compressing new results for the rest of the session.
 6. **Marker fidelity**: every compressed result carries exactly one marker naming the real `toolCallId`. `expand_output` must resolve every marker it ever emitted; if the entry is not on the current branch, say so in the tool result instead of erroring.
 
 ## Implementation options considered
@@ -151,10 +151,11 @@ Before building compressors, add a measure-only mode (one evening of work): the 
 - **Model confusion from markers**: the model may call `expand_output` reflexively and erase the savings. Mitigation: guidelines wording, and the stats command tracks expansion rate; if a content type gets expanded > 30% of the time, stop compressing that type (that decision must be per-session-start, not mid-session, to preserve byte stability).
 - **Correctness on JSON the agent needs verbatim**: e.g. the agent reads JSON intending to edit it. Mitigation: never compress results of `read` on paths ending `.json` (file edits need exact bytes); only compress `bash` and MCP/custom tool outputs initially.
 - **Memo/session drift**: `/fork`, `/tree` rewind, and branch switches change which entries exist. The memo is keyed by entryId + content hash, so stale entries simply never get looked up; no invalidation logic needed.
-- **Compaction interaction**: pi's compaction summarizes using the context. It should see originals, not compressed forms. `session_before_compact` receives entries from the session (originals), not the `context`-modified copy, so this is safe by construction; verify with a test.
+- **Compaction interaction**: pi's compaction summarizes using the context. It should see originals, not compressed forms. `session_before_compact` receives entries from the session (originals), not the `context`-modified copy, so this is safe by construction; verify with a test. Compaction also truncates each tool result to 2000 chars during `serializeConversation`, so it never sees the markers regardless.
+- **First-resume recompress cost**: the memo is empty after restart, so the first LLM call on a resumed session recompresses the entire tool-result history at once. This can add latency on large sessions. Do not bound it with a wall-clock budget (that breaks determinism); if a bound is needed, cap by a content-independent rule such as "only the most recent N tool results". The per-result heuristics are cheap on the ≤50KB blobs pi produces, so a bound is likely unnecessary.
 
 ## Open questions
 
-1. Should `write`/`edit` tool results (small confirmations) be excluded by tool name allowlist instead of the size gate alone? Probably yes: allowlist `bash` + MCP tools first, expand later.
+1. Should `write`/`edit` tool results (small confirmations) be excluded by tool name allowlist instead of the size gate alone? Probably yes: allowlist `bash` + MCP tools first, expand later. Note that agent bash output arrives as a `toolResult` with `toolName: "bash"`; the `bashExecution` role is only for user `!`/`!!` commands and is out of scope.
 2. Marker syntax: Headroom uses `<<ccr:HASH>>`. Angle brackets can collide with XMLish prompts. Proposed `[pi-headroom: ... id=...]` instead; confirm no rendering issues in TUI.
-3. Is chars/4 estimation good enough for the shrink gate, or should the gate use `ctx.getContextUsage()` deltas? Start with chars/4; it only gates, never breaks.
+3. Is chars/4 estimation good enough for the shrink gate, or should the gate use `ctx.getContextUsage()` deltas? Start with chars/4; it only gates, never breaks. Do not switch the gate to `getContextUsage()`: it depends on live usage and model state, so the compress/passthrough decision would differ across restart and bust the cache (Invariant 2).

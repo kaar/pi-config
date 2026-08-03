@@ -8,6 +8,8 @@ Source investigation: headroomlabs-ai/headroom (Apache 2.0)
 
 A pi extension that compresses large tool outputs before they reach the LLM, ported from the compression core of [Headroom](https://github.com/chopratejas/headroom). Headroom's own numbers: 60-95% token reduction on JSON tool outputs, 15-20% overall for coding agents. The extension takes only the compression part (content detection, per-type compressors, reversible retrieval) and drops everything else Headroom ships (proxy, memory, telemetry, learn, subscription tracking, evals, install tooling), which is roughly 90% of that codebase.
 
+Verdict on value: marginal. See [Prior art and evidence](#prior-art-and-evidence). Pi's existing prompt caching, 50KB truncation, and compaction already deliver most of the benefit for far less complexity, so this is an evidence-gated, opt-in optimization rather than an obvious win.
+
 Verdict on feasibility: yes, and the pi extension model is a better host for this than Headroom's own proxy. Headroom needs a proxy because it works on opaque HTTP traffic. Pi hands extensions the structured message array before every LLM call (`context` event) and lets tools be registered for retrieval. The two hardest problems Headroom solves (wire-format fidelity, prompt-cache safety across an HTTP boundary) mostly disappear inside pi.
 
 ## What Headroom's core actually is
@@ -142,9 +144,29 @@ Explicitly not ported:
 - `pi.registerCommand("headroom", ...)`: `/headroom` shows per-session stats (calls compressed, tokens before/after estimate, savings %); `/headroom off|on` toggles; state kept via `pi.appendEntry("pi-headroom-config", ...)`.
 - `ctx.ui.setStatus("pi-headroom", "…saved ~Nk tok")`: running savings counter in the footer.
 
+## Prior art and evidence
+
+This pattern is not novel, and the honest read of the evidence is that it is a second-order optimization on top of mechanisms pi already has. Weigh it accordingly before building.
+
+**Production agents already ship a lighter version of this.** Claude Code has "microcompact" (a no-LLM inline pass that removes redundant tool outputs every turn) and "tool output clearing" (drop older tool results first, before any summarization). OpenCode prunes tool output while protecting the last 40k tokens. Roo Code keeps function signatures via tree-sitter. Anthropic's context editing (`clear_tool_uses`) reports +29% task performance from clearing stale tool results alone (+39% with the memory tool) and 84% token reduction on a 100-turn web-search eval. The consistent industry choice is to clear or prune stale tool outputs, not to reversibly compress them in place. (Sources: [Context Compaction Showdown](https://codex.danielvaughan.com/2026/04/10/context-compaction-showdown-coding-agents/); [Anthropic, Managing context](https://claude.com/blog/context-management).)
+
+**Prompt caching, not token count, is the dominant cost lever.** "Don't Break the Cache" (arXiv:2601.06007) measures 41-80% cost savings and 13-31% TTFT improvement from caching, and finds cache-aware strategies beat naive full-context caching, which can paradoxically raise latency. Cache reads run about 92% cheaper than cold reads; one compaction on a 125k context costs roughly $0.40, about 21 cached follow-up turns. The corollary is blunt: any compression that forces even occasional cache-prefix misses can cost more than it saves. Token reduction is not cost reduction. (Sources: [arXiv:2601.06007](https://arxiv.org/abs/2601.06007); [Context Compaction Showdown](https://codex.danielvaughan.com/2026/04/10/context-compaction-showdown-coding-agents/).)
+
+**Reliability complaints target the destructive Extract pattern, not this design.** The widely reported "context rewriting degrades the agent" failures come from LLM summarize-and-discard compaction, which compounds loss across cycles. This extension is non-destructive and reversible (originals stay in the session), so it avoids that class of failure. That is its main edge over the mainstream clear/prune approach.
+
+**The marginal gain over what pi already does is small.** Pi already captures the large, cheap wins:
+- Prompt caching is on by default and delivers the 41-80% that dominates cost.
+- The `read` tool truncates at 50KB / 2000 lines, so the worst blobs are capped before they ever enter context.
+- Compaction summarizes old turns near the context limit, and pi accumulates file-operation tracking across cycles so the highest-value state survives.
+- Subagents and fresh sessions (the most-recommended practice for long work) sidestep context growth entirely.
+
+Against that baseline, structure-aware compression of tool outputs is a narrow slice. It only helps the window between "output exceeds ~2KB" and "compaction fires", only for the content types that actually dominate a given session, and only if it stays perfectly cache-stable. The realistic expectation is a small single-digit improvement in effective context headroom for a specific workload, bought with ~1,000-1,500 lines of code, a memoization discipline, and a standing cache-safety obligation. Truncation and compaction already deliver most of the benefit for a fraction of the complexity.
+
+**Consequence for this project.** Treat the build as opt-in and evidence-gated. The measure-only mode below is not a preliminary step, it is the deciding one. Prefer caching, subagents, and pi's existing compaction first; build the compressors only if the data clearly justifies them.
+
 ## Measurement plan
 
-Before building compressors, add a measure-only mode (one evening of work): the `context` handler logs size, detected type, and would-be savings per tool result to `~/.pi/agent/pi-headroom-stats.jsonl` without modifying anything. A week of normal use answers which compressors matter for actual pi sessions and whether the 15-20% coding-agent figure holds here. Build only the compressors the data justifies. Note that pi's built-in 50KB truncation already caps the worst blobs; the win here is turning blind truncation into structure-aware selection.
+Before building compressors, add a measure-only mode (one evening of work): the `context` handler logs size, detected type, and would-be savings per tool result to `~/.pi/agent/pi-headroom-stats.jsonl` without modifying anything. A week of normal use answers which compressors matter for actual pi sessions and whether the 15-20% coding-agent figure holds here. Build only the compressors the data justifies. Note that pi's built-in 50KB truncation already caps the worst blobs; the win here is turning blind truncation into structure-aware selection. Track billed cost and cache-hit rate with and without the extension, not just estimated token savings: per the evidence above, that is the metric that actually decides whether this pattern helps, since a compression that dents the prompt cache can raise cost while lowering token counts.
 
 ## Risks
 

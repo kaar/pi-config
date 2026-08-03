@@ -30,6 +30,31 @@
 ## Markdown
 - When writing markdown files, do not hard-wrap prose. One paragraph per line; let the editor soft-wrap.
 
+## ASCII tables and box diagrams
+- Every row (top border, separators, content, bottom border) must have the exact same display width so the right-hand `│` characters line up in a straight vertical column.
+- Set the width from the widest content row, then extend all border rows (`─`) to match. Do not size borders to a shorter row.
+- Pad shorter content rows with trailing spaces before the closing `│` so all right borders align.
+
+Bad (border rows too short, right `│` does not align):
+```
+┌──────────────────────────┐
+│   key  column header             │
+├──────────────────────────┤
+│   foo  a short value             │
+│   bar  a noticeably longer value │
+└──────────────────────────┘
+```
+
+Good (all rows the same width, right border aligned):
+```
+┌──────────────────────────────────┐
+│   key  column header             │
+├──────────────────────────────────┤
+│   foo  a short value             │
+│   bar  a noticeably longer value │
+└──────────────────────────────────┘
+```
+
 ## Shell scripts
 - Shebang: `#!/usr/bin/env bash` (portable, picks up Homebrew bash on macOS)
 - Strict mode at the top of every script:

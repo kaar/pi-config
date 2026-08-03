@@ -57,3 +57,8 @@ There are also some other extensions that are interesting like `pi-session-recal
 ## /recap
 
 I would like a similar skill in Pi as clauds recap feature
+
+## Change ci from skill to script
+
+Consider rewriting pi-ai-commit to a script like q-pi
+See ~/Dev/scripts/q-pi

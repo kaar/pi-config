@@ -10,20 +10,6 @@ Creates a symlink from `~/.pi/agent` to the `agent/` directory in this repo.
 ./install.sh
 ```
 
-## Models
-
-The configured models accept text and image input and support reasoning. Prices are USD per million tokens, taken from the local provider model catalog.
-
-| Model | Documentation | Input | Output | Cached read | Cache write | Context window | Maximum output |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| GPT-5.6 Luna | [OpenAI model docs](https://platform.openai.com/docs/models) | $1 | $6 | $0.10 | $1.25 | 272k direct, 1.05M via Copilot | 128k |
-| GPT-5.6 Terra | [OpenAI model docs](https://platform.openai.com/docs/models) | $2.50 | $15 | $0.25 | $3.125 | 272k direct, 1.05M via Copilot | 128k |
-| Claude Sonnet 5 | [Anthropic model overview](https://docs.anthropic.com/en/docs/about-claude/models/overview) | $2 | $10 | $0.20 | $2.50 | 1M | 128k |
-| Claude Opus 5 | [Anthropic model overview](https://docs.anthropic.com/en/docs/about-claude/models/overview) | $5 | $25 | $0.50 | $6.25 | 1M | 128k direct, 64k via Copilot |
-| Claude Fable 5 | [Anthropic model overview](https://docs.anthropic.com/en/docs/about-claude/models/overview) | $10 | $50 | $1 | $12.50 | 1M | 128k |
-
-The provider catalogs do not include dedicated documentation URLs for these exact model IDs, so the links above point to the relevant official provider model documentation.
-
 ## Structure
 
 - `agent/`: PI agent configuration (symlinked to `~/.pi/agent`)

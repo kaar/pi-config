@@ -1,6 +1,6 @@
 {
-  "defaultModel": "claude-opus-5",
-  "defaultProvider": "anthropic",
+  "defaultModel": "deepseek/deepseek-v4-flash",
+  "defaultProvider": "openrouter",
   "defaultThinkingLevel": "high",
   "hideThinkingBlock": false,
   "lastChangelogVersion": "0.83.0",

@@ -24,6 +24,11 @@ Creates a symlink from `~/.pi/agent` to the `agent/` directory in this repo.
 - `AGENTS.md`: guidelines for parallel agents (tool usage, git safety rules, writing style)
 - `install.sh`: symlink setup script
 
+## Providers
+
+- **anthropic** - `agent/models.json` overrides the base URL to a local proxy at `http://localhost:4000`
+- **openrouter** - built-in provider, no `models.json` entry needed. Authenticated via the `OPENROUTER_API_KEY` environment variable (resolved automatically by pi's standard credential lookup). Enabled models are listed under `enabledModels` in `agent/settings.json` (e.g. `openrouter/moonshotai/kimi-k3`, `openrouter/deepseek/deepseek-v4-flash`, `openrouter/qwen/qwen3.8-max`)
+
 ## Extensions
 
 TypeScript extensions that add functionality to the agent. See [docs/extensions.md](docs/extensions.md).

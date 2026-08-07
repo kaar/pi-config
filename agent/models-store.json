@@ -1552,7 +1552,7 @@
         }
       }
     ],
-    "checkedAt": 1786090886299,
+    "checkedAt": 1786108652742,
     "lastModified": 1786004033000,
     "etag": "W/\"2174ed7392c0d5376beba2c4ee0b170f\""
   },
@@ -2635,7 +2635,7 @@
         }
       }
     ],
-    "checkedAt": 1786090887790,
+    "checkedAt": 1786108554297,
     "lastModified": 1786089691000,
     "etag": "W/\"335adf891b521321ae4a07eacab9106c\""
   },
@@ -2934,7 +2934,7 @@
         }
       }
     ],
-    "checkedAt": 1786090886379,
+    "checkedAt": 1786108551640,
     "lastModified": 1785751537000,
     "etag": "W/\"afb16fb1ea6c24c1a16a7acfcb4c5bea\""
   },
@@ -10654,13 +10654,13 @@
           "text"
         ],
         "cost": {
-          "input": 0.6818,
-          "output": 2.1428,
-          "cacheRead": 0.12662,
+          "input": 0.76,
+          "output": 2.42,
+          "cacheRead": 0.14,
           "cacheWrite": 0
         },
-        "contextWindow": 1048576,
-        "maxTokens": 131072,
+        "contextWindow": 262144,
+        "maxTokens": 262144,
         "compat": {
           "supportsDeveloperRole": false,
           "thinkingFormat": "openrouter"
@@ -10993,9 +10993,9 @@
         }
       }
     ],
-    "checkedAt": 1786090886302,
-    "lastModified": 1786089708000,
-    "etag": "W/\"d1b162776e3ea56aa47e686c02cab2d9\""
+    "checkedAt": 1786108554217,
+    "lastModified": 1786098940000,
+    "etag": "W/\"302637aba18cf37f73bab0a075c7b804\""
   },
   "google": {
     "models": [

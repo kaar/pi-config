@@ -72,3 +72,10 @@ disable-model-invocation: true
 This is part of the standard that I think Claude Code invokes. It is not part of the SKILLs standard that Pi uses.
 
 Also not executing `!<command>` inside skills.
+
+
+## Extensions
+
+### To Review
+https://github.com/elpapi42/pi-observational-memory, ~/Dev/pi-observational-memory
+https://github.com/MasuRii/pi-rtk-optimizer, ~/Dev/pi-rtk-optimizer

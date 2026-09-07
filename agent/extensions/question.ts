@@ -42,6 +42,13 @@ const QuestionParams = Type.Object({
 });
 
 export default function question(pi: ExtensionAPI) {
+	pi.on("session_start", (_event, ctx) => {
+		if (ctx.mode !== "tui") return;
+		registerQuestion(pi);
+	});
+}
+
+function registerQuestion(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "question",
 		label: "Question",

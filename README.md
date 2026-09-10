@@ -55,6 +55,7 @@ Interactive sub-agent management (experimental, under evaluation).
 Prompt templates are Markdown snippets that expand into full prompts. Type `/name` in the editor to invoke a template, where `name` is the filename without `.md`. See [docs/prompt-templates.md](docs/prompt-templates.md).
 
 - **review-staged** - Review staged git changes for bugs, security issues, and error handling gaps
+- **openrouter** - Show OpenRouter API-key usage and remaining account credits
 
 ## Skills
 

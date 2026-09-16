@@ -13,8 +13,8 @@
  *  - Blocks destructive git commands (reset --hard, clean -f, checkout ., etc.).
  */
 
-import type { ExtensionAPI, ExtensionContext, BashToolCallEvent } from "@mariozechner/pi-coding-agent";
-import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, BashToolCallEvent } from "@earendil-works/pi-coding-agent";
+import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { resolve, dirname, join } from "node:path";
 import { existsSync, realpathSync, writeFileSync, readFileSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";

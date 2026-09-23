@@ -108,20 +108,39 @@ It should be able to create loops
 
 It should be able to write stuff into a repo, change files etc.
 
-## Markdown links are not usable
+## Markdown links: visibility workaround applied
 
-When Pi outputs a Markdown file link such as `Created [the course refresh review](docs/research/course-refresh-review.md),`, the TUI only displays the label as underlined text. The target path is hidden and the link cannot be opened, so the user cannot tell which file was created.
+**Decision:** Use Pi's existing setting, not an extension. The local `agent/settings.json` (symlinked as `~/.pi/agent/settings.json`) now contains:
 
-This also affects ordinary `http` and `https` Markdown links. The session log at `~/Dev/jev/links-in-conversation.jsonl` contains examples where the rendered labels cannot be used to open the URLs.
+```json
+{
+  "terminal": {
+    "hyperlinks": false
+  }
+}
+```
 
-Findings:
+This is a settings fragment, not a replacement for the whole file. `agent/settings.json` is Git-ignored, so the setting must be reapplied on a fresh installation. Run `/reload` to apply it to the current session.
 
-- Pi 0.87.1 detects Ghostty's OSC 8 support and deliberately renders a Markdown link as its label only. `terminal.hyperlinks: false` or `PI_HYPERLINKS=0` restores Pi's visible `label (target)` fallback.
-- Pi passes a relative Markdown target directly to OSC 8. It does not resolve `docs/research/course-refresh-review.md` against the session working directory or convert it to a percent-encoded absolute `file://` URI, so local file links cannot reliably open.
-- Herdr 0.8.2 captures mouse input. On macOS, use Ctrl-click for Herdr-handled OSC 8 and HTTP(S) links. Shift-Cmd-click bypasses Herdr to Ghostty. Herdr issue #2284 confirms this exact Ghostty usability problem and notes that the hover/target indication is not yet obvious.
+### Why the setting is needed
 
-Suggested solution:
+Pi 0.87.1 detects Ghostty's OSC 8 hyperlink support. With the default `"auto"`, Pi shows only the underlined Markdown label and hides the target. For example, `[the course refresh review](docs/research/course-refresh-review.md)` hides the file path. Descriptive labels also hide HTTP(S) URLs.
 
-- Short term: use Ctrl-click for HTTP(S) links in Herdr. Set `terminal.hyperlinks: false` when seeing the literal target is more useful than a hidden OSC 8 target.
-- Proper fix: resolve existing relative Markdown file targets against Pi's session CWD and emit an encoded absolute `file://` URI. Retain a visible target fallback, or show it on hover, so the destination is never opaque.
-- A local Pi extension could use `registerMarkdownTransformer()` to rewrite existing relative file links into absolute `file://` links and include the path in the visible label until Pi supports this natively.
+Setting `terminal.hyperlinks` to `false` disables OSC 8 output and restores `label (target)`. If the label already equals the target, Pi shows it only once. Paths and URLs stay visible for copying, even when mouse handling prevents a click. This does not disable the terminal's automatic detection of visible HTTP(S) URLs.
+
+For a one-off session, use `PI_HYPERLINKS=0 pi` instead of changing settings.
+
+### Remaining limitation
+
+- [ ] Track upstream support for opening relative Markdown file links. Pi currently passes relative targets directly to OSC 8, without resolving the session directory or encoding an absolute `file://` URI. The visibility setting does not fix file opening. Reconsider `"auto"` only when destinations remain discoverable and local links open correctly.
+
+No custom transformer is planned. The extension draft and its dependency were removed in favor of the setting.
+
+### Evidence and terminal behavior
+
+- Reproduction environment: Pi 0.87.1, Herdr 0.8.2, and Ghostty on macOS.
+- Example session log: `~/Dev/jev/links-in-conversation.jsonl`.
+- [Pi settings reference](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/settings.md): `terminal.hyperlinks` accepts `true`, `false`, or `"auto"`.
+- [Pi environment variables](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/environment-variables.md): `PI_HYPERLINKS` accepts `1`, `0`, or `auto`.
+- [Pi Markdown renderer](https://github.com/earendil-works/pi/blob/main/packages/tui/src/components/markdown.ts): the OSC 8 branch hides the target; the fallback prints it when it differs from the label.
+- [Herdr issue #2284](https://github.com/ogulcancelik/herdr/issues/2284): Herdr handles Ctrl-click while mouse capture is active. On macOS, Shift-Cmd-click bypasses Herdr to Ghostty. The issue also records missing hover feedback for OSC 8 destinations. With this workaround, Ctrl-click applies to visible HTTP(S) URLs rather than hidden Markdown targets.

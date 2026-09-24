@@ -1,3 +1,15 @@
+## Scope and Simplicity
+- Default to the smallest complete solution for the stated need. Simplicity means fewer concepts, dependencies, and maintenance obligations, not merely fewer lines.
+- Treat the user's request as the scope boundary. Do not add features or requirements for hypothetical future use.
+- Match the solution to its actual operating context. A manually run, single-operator script does not need the architecture of an unattended, multi-user service.
+- Prefer existing tools and straightforward code. Add abstractions, schemas, frameworks, or custom parsers only when a current requirement needs them.
+- Every additional safeguard must address a concrete failure with a meaningful consequence in this context. Preserve necessary data-loss and security protections, but do not treat every imaginable failure as a requirement.
+- Prefer clear failure and documented manual recovery over automatic retries, fallback paths, resumability, or state machines unless automation is required.
+- Do not make the core task depend on unrelated configuration or optional metadata. Record contextual information without turning it into a gate.
+- Keep tests and documentation proportional. Verify the required behavior and consequential failure paths; do not build elaborate scaffolding to justify an elaborate design.
+- Before presenting or implementing a solution, remove anything that is not needed for the requested outcome. Mention optional improvements separately instead of including them.
+- If a simple approach cannot meet a requirement safely, explain the specific limitation before expanding the scope.
+
 ## Tool Usage
 - NEVER use `sed` or `cat` to read files. Always use the read tool.
 - Use `offset` and `limit` for ranged reads. Omit both when reading a file in full.

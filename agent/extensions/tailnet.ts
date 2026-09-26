@@ -16,6 +16,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { hostname } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	type BashOperations,
@@ -131,6 +132,7 @@ function createRemoteBashOps(remote: string, remoteCwd: string, localCwd: string
 export default function (pi: ExtensionAPI) {
 	pi.registerFlag("tailnet", { description: "Tailscale SSH remote: user@host or user@host:/path", type: "string" });
 
+	const localHost = hostname();
 	const localCwd = process.cwd();
 	const localRead = createReadTool(localCwd);
 	const localWrite = createWriteTool(localCwd);
@@ -256,7 +258,7 @@ export default function (pi: ExtensionAPI) {
 		return { operations: createRemoteBashOps(ssh.remote, ssh.remoteCwd, localCwd) };
 	});
 
-	// Replace local cwd with remote cwd in system prompt
+	// Correct the cwd and distinguish the local Pi process from remote tool execution.
 	pi.on("before_agent_start", async (event) => {
 		const error = getSshError();
 		if (error) return { systemPrompt: `${event.systemPrompt}\n\n${error}` };
@@ -266,7 +268,26 @@ export default function (pi: ExtensionAPI) {
 				`Current working directory: ${localCwd}`,
 				`Current working directory: ${ssh.remoteCwd} (via Tailscale SSH: ${ssh.remote})`,
 			);
-			return { systemPrompt: modified };
+			return {
+				systemPrompt: `${modified}
+
+## Remote execution context
+
+Remote execution through Tailscale SSH is enabled.
+
+- Pi host: ${localHost}
+- Pi launch directory: ${localCwd}
+- Remote SSH target: ${ssh.remote}
+- Remote working directory: ${ssh.remoteCwd}
+
+The read, write, edit, and bash tools operate on the remote machine.
+Relative tool paths resolve against the remote working directory.
+Run commands directly with bash. Do not wrap them in another SSH call.
+
+Other extension tools and subagents are not automatically remote.
+Do not assume that local configuration paths exist on the remote machine.
+If the remote connection fails, local execution remains disabled for these four tools.`,
+			};
 		}
 	});
 }

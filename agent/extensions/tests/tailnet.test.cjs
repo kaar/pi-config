@@ -54,6 +54,7 @@ function harness(flag) {
 		clearTimeout: (timer) => timers.delete(timer),
 		require(name) {
 			if (name === "node:fs") return { existsSync: () => false };
+			if (name === "node:os") return { hostname: () => "local-pi-host" };
 			if (name === "node:child_process") {
 				return {
 					spawn(command, args) {
@@ -113,6 +114,7 @@ test("without --tailnet, tools and user commands retain local behavior", async (
 	assert.equal(h.statuses.at(-1).text, undefined);
 	for (const tool of h.tools.values()) assert.equal((await tool.execute()).backend, "local");
 	assert.equal(h.handlers.get("user_bash")({}), undefined);
+	assert.equal(await h.handlers.get("before_agent_start")({ systemPrompt: "original" }), undefined);
 });
 
 for (const [target, command, cwd] of [
@@ -138,9 +140,35 @@ for (const [target, command, cwd] of [
 		const prompt = await h.handlers.get("before_agent_start")({
 			systemPrompt: `Current working directory: ${process.cwd()}`,
 		});
-		assert.match(prompt.systemPrompt, /via Tailscale SSH: user@host/);
+		assert.ok(prompt.systemPrompt.startsWith(`Current working directory: ${cwd} (via Tailscale SSH: user@host)`));
+		assert.ok(prompt.systemPrompt.includes("## Remote execution context"));
+		assert.ok(prompt.systemPrompt.includes("- Pi host: local-pi-host"));
+		assert.ok(prompt.systemPrompt.includes(`- Pi launch directory: ${process.cwd()}`));
+		assert.ok(prompt.systemPrompt.includes("- Remote SSH target: user@host"));
+		assert.ok(prompt.systemPrompt.includes(`- Remote working directory: ${cwd}`));
+		assert.match(prompt.systemPrompt, /The read, write, edit, and bash tools operate on the remote machine\./);
+		assert.match(prompt.systemPrompt, /Relative tool paths resolve against the remote working directory\./);
+		assert.match(prompt.systemPrompt, /Do not wrap them in another SSH call\./);
+		assert.match(prompt.systemPrompt, /Other extension tools and subagents are not automatically remote\./);
+		assert.match(prompt.systemPrompt, /Do not assume that local configuration paths exist on the remote machine\./);
+		assert.match(prompt.systemPrompt, /local execution remains disabled for these four tools\./);
+		assert.equal(h.children.length, 1);
 	});
 }
+
+test("remote context is added to custom prompts and stays stable across turns", async () => {
+	const h = harness("user@host:/project");
+	const started = h.start();
+	h.children[0].finish(0, "/project\n");
+	await started;
+	const event = { systemPrompt: "Custom instructions without a working-directory line." };
+	const first = await h.handlers.get("before_agent_start")(event);
+	const second = await h.handlers.get("before_agent_start")(event);
+	assert.ok(first.systemPrompt.startsWith(`${event.systemPrompt}\n\n## Remote execution context`));
+	assert.ok(first.systemPrompt.includes("- Remote working directory: /project"));
+	assert.equal(second.systemPrompt, first.systemPrompt);
+	assert.equal(h.children.length, 1);
+});
 
 for (const reason of ["unknown user", "Permission denied", "host unreachable", "cd: /root: No such file or directory"]) {
 	test(`startup failure reports ${reason} and blocks local fallback`, async () => {
@@ -155,6 +183,8 @@ for (const reason of ["unknown user", "Permission denied", "host unreachable", "
 		await assertBlocked(h, /Tailnet unavailable/);
 		const prompt = await h.handlers.get("before_agent_start")({ systemPrompt: "original" });
 		assert.match(prompt.systemPrompt, /Local execution is disabled/);
+		assert.ok(prompt.systemPrompt.startsWith("original\n\n"));
+		assert.doesNotMatch(prompt.systemPrompt, /Remote execution through Tailscale SSH is enabled/);
 	});
 }
 
@@ -199,6 +229,7 @@ test("session startup clears stale success and permits recovery after a failed c
 	await h.start();
 	assert.equal((await h.tools.get("write").execute()).backend, "local");
 	assert.equal(h.statuses.at(-1).text, undefined);
+	assert.equal(await h.handlers.get("before_agent_start")({ systemPrompt: "original" }), undefined);
 });
 
 for (const target of ["", ":/root", "user@host:", "-invalid"]) {

@@ -48,6 +48,7 @@ Interactive sub-agent management (experimental, under evaluation).
 - **git-guard** - Safety checks for destructive git operations
 - **git-checkpoint** - Automatic git-based checkpoints
 - **todos** - Todo management within sessions
+- **handoff** - `/handoff <goal>` continues the current work in a fresh Pi session in a new Herdr pane. It generates a focused prompt from the active branch and opens it in an editor for review. On acceptance, it starts Pi in an unfocused right-hand split in the same directory and pastes the prompt there. The model selected when `/handoff` runs (exact provider and model) is used both to generate the prompt and for the new Pi session. Thinking level is not carried over. The prompt stays an editable draft until you press Enter in the new pane. Requires Pi to run inside a Herdr pane. The source session is not changed. If the launch fails, the prompt is restored to the source editor.
 
 
 ## Prompts

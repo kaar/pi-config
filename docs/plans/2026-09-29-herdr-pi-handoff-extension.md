@@ -20,7 +20,7 @@ In an interactive Pi session inside Herdr, the user can run:
 /handoff implement phase one of the plan
 ```
 
-Pi generates a concise, self-contained prompt from the active branch and that goal. The user can edit or cancel it. On acceptance, the extension creates an unfocused right-hand sibling pane in the same working directory, starts a fresh Pi agent there, and pastes the approved prompt into its editor. The prompt is visible and editable in the successor pane but is not submitted. The original session stays in its source pane and no handoff artifact, configuration file, session mutation, or automatic work is created.
+Pi generates a concise, self-contained prompt from the active branch and that goal with the model selected when `/handoff` is invoked. The user can edit or cancel it. On acceptance, the extension creates an unfocused right-hand sibling pane in the same working directory, starts a fresh Pi agent there with that same provider/model selection, and pastes the approved prompt into its editor. The prompt is visible and editable in the successor pane but is not submitted. The original session stays in its source pane and no handoff artifact, configuration file, session mutation, or automatic work is created.
 
 ### Key Discoveries:
 
@@ -30,8 +30,11 @@ Pi generates a concise, self-contained prompt from the active branch and that go
 - Pi's official handoff example already establishes correct branch and compaction reconstruction, model generation, and editor-review patterns: `/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/examples/extensions/handoff.ts:37-156`.
 - The official example switches the current session with `ctx.newSession()`, which conflicts with retaining the source pane: `/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/examples/extensions/handoff.ts:174-187`.
 - Herdr separates pane creation from agent startup. `agent start` waits until Pi is ready, and `pane send-text` sends text without Enter: `/Users/casparnettelbladt/.agents/skills/herdr-docs/herdr/docs/versions/0.9.1/website/src/content/docs/agent-automation.mdx:16-30,42-67`.
-- Herdr's CLI explicitly supports `pane split --current --direction right --cwd ... --no-focus`, `agent start --kind pi`, and `pane send-text`: `/Users/casparnettelbladt/.agents/skills/herdr-docs/herdr/docs/versions/0.9.1/website/src/content/docs/cli-reference.mdx:217-253,341-360`.
+- Herdr's CLI explicitly supports `pane split --current --direction right --cwd ... --no-focus`, `agent start --kind pi` with native arguments after `--`, and `pane send-text`: `/Users/casparnettelbladt/.agents/skills/herdr-docs/herdr/docs/versions/0.9.1/website/src/content/docs/cli-reference.mdx:217-253,341-360`.
+- Pi's `--model` option accepts an exact `provider/model` value, allowing the successor process to receive the source session's selected provider and model: `/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/docs/cli.md:57-70`.
 - Herdr's Pi integration is installed but reports version 6 when version 9 is current. It is separate from this extension and not a delivery dependency: `agent/extensions/herdr-agent-state.ts:1-6` and `herdr integration status` observed on 2026-09-29.
+- Phase 0 live probe (Herdr 0.9.1, Pi 0.87.1, 2026-09-29): `agent start --kind pi` succeeded in about 3 seconds despite the outdated integration. `pane send-text` printed nothing on success and left a multi-line and a 30-line prompt as an editable, unsubmitted Pi draft with agent status `idle`. Text that begins with `-` or `--` is accepted as the text positional. `pane send-text` does not treat `--` as an end-of-options marker, so the extension must not pass one there. CLI errors are JSON with exit status 1.
+- `@earendil-works/pi-agent-core` is not resolvable from `agent/extensions/` for typechecking because it is only a nested dependency. Derive the agent message type from `convertToLlm`'s parameter instead of adding a dependency.
 
 ## What We're NOT Doing
 
@@ -47,9 +50,9 @@ Pi generates a concise, self-contained prompt from the active branch and that go
 
 Implement an `agent/extensions/handoff/` extension module with `index.ts` as its one `/handoff <goal>` entry point. Keep version-one helpers in `index.ts` because it has one command, one generation request, and one Herdr launch sequence. The directory establishes an isolated module boundary so later helpers, UI, or tests can move into focused files without reorganizing the extension's public location.
 
-The command must first require TUI mode, an active model, a non-empty goal, and `HERDR_ENV=1` with a current Herdr pane. If any precondition fails, it must notify the user and make no model call or Herdr change. It must wait for the current agent to settle before taking the branch snapshot.
+The command must first require TUI mode, an active model, a non-empty goal, and `HERDR_ENV=1` with a current Herdr pane. If any precondition fails, it must notify the user and make no model call or Herdr change. It must wait for the current agent to settle before taking the branch snapshot, then capture `ctx.model.provider` and `ctx.model.id` once. That invocation-time model selection is used for both handoff generation and successor startup, so a model switch immediately before `/handoff` is honored.
 
-Reuse the official example's semantic approach, not its session-replacement step. Convert message and compaction entries from `ctx.sessionManager.getBranch()` into the reconstructed active context, call `convertToLlm()` and `serializeConversation()`, then make one nested `ctx.modelRegistry.complete()` call with `ctx.model`. The generator system prompt must request a concise, self-contained continuation prompt with context, decisions, relevant files, current state, and the user-supplied next task. It must request only the prompt, with no conversational preamble. Use `BorderedLoader` and its abort signal for the generation UI. A compacted branch must include the latest compaction summary plus entries retained from its `firstKeptEntryId`, matching the official example.
+Reuse the official example's semantic approach, not its session-replacement step. Convert message and compaction entries from `ctx.sessionManager.getBranch()` into the reconstructed active context, call `convertToLlm()` and `serializeConversation()`, then make one nested `ctx.modelRegistry.complete()` call with the captured current model. The generator system prompt must request a concise, self-contained continuation prompt with context, decisions, relevant files, current state, and the user-supplied next task. It must request only the prompt, with no conversational preamble. Use `BorderedLoader` and its abort signal for the generation UI. A compacted branch must include the latest compaction summary plus entries retained from its `firstKeptEntryId`, matching the official example.
 
 After generation, open `ctx.ui.editor()` so the user approves and edits the transfer. Cancelling either the loader or editor ends the command without creating a pane. An empty generated result is an error rather than a reason to start a blank Pi session.
 
@@ -57,10 +60,10 @@ After approval, run the Herdr binary from `HERDR_BIN_PATH` when present, otherwi
 
 1. `pane split --current --direction right --cwd <ctx.cwd> --no-focus`.
 2. Parse the JSON response and require `.result.pane.pane_id`.
-3. `agent start <unique-handoff-name> --kind pi --pane <pane-id>` so Herdr waits for the new Pi editor to be ready.
+3. `agent start <unique-handoff-name> --kind pi --pane <pane-id> -- --model <provider>/<model-id>` so Herdr waits for the new Pi editor to be ready with the source session's selected model.
 4. `pane send-text <pane-id> <approved-prompt>` to leave the prompt as an editable draft without pressing Enter.
 
-The generated agent name must begin with a letter, be at most 32 characters, and include a timestamp-derived suffix so parallel handoffs do not collide. The command must not call `agent prompt`, `pane run`, `sendUserMessage`, or `ctx.newSession()`.
+The generated agent name must match Herdr's `[a-z][a-z0-9_-]{0,31}` rule and include a timestamp-derived suffix so parallel handoffs do not collide. The command must not call `agent prompt`, `pane run`, `sendUserMessage`, or `ctx.newSession()`.
 
 If Herdr fails before a pane is created, notify the user and leave the source session intact. If it fails after the split, notify the user with the created pane ID for inspection or manual close. In either failure case after editor acceptance, restore the approved prompt into the source Pi editor with `ctx.ui.setEditorText()` so the user does not lose it. Do not automatically close a pane created by this command; clear failure and manual recovery are preferable to hidden cleanup.
 
@@ -94,11 +97,11 @@ Create the global extension and make `/handoff <goal>` reliably generate and rev
 **File**: `agent/extensions/handoff/index.ts`
 **Changes**: Add the module's auto-discovered entry point that registers `/handoff` and implements preflight, active-branch reconstruction, one nested model completion, loader cancellation, and editor review.
 
-- Import only Pi-supplied packages: `@earendil-works/pi-agent-core`, `@earendil-works/pi-ai`, and `@earendil-works/pi-coding-agent`.
+- Import only Pi-supplied packages: `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent`.
 - Adapt the official `entryToMessage()` and `getHandoffMessages()` behavior so the current branch is represented correctly after compaction.
 - Require TUI mode, a selected model, a non-empty goal, and Herdr environment variables before generation.
-- Call `ctx.waitForIdle()` before reading `ctx.sessionManager.getBranch()`.
-- Serialize the reconstructed branch and use `ctx.modelRegistry.complete()` with a fresh `uuidv7()` session ID, `cacheRetention: "none"`, and the loader's abort signal.
+- Call `ctx.waitForIdle()` before reading `ctx.sessionManager.getBranch()`, then capture the selected model's provider and ID. Do not read a cached startup model or the configured default.
+- Serialize the reconstructed branch and use `ctx.modelRegistry.complete()` with that captured model, a fresh `uuidv7()` session ID, `cacheRetention: "none"`, and the loader's abort signal.
 - Extract text blocks only. Treat a cancelled response, a completion error, or blank text as a user-visible failure with no side effect.
 - Open `ctx.ui.editor("Edit handoff prompt", generatedPrompt)`. A cancelled editor stops cleanly. A returned value is the approved handoff text for Phase 2.
 
@@ -132,7 +135,8 @@ Connect the approved prompt to a fresh, ready Pi process in a right-hand Herdr s
 - Resolve the executable as `process.env.HERDR_BIN_PATH ?? "herdr"`.
 - Split the caller pane with `pi.exec()` using `--current`, `--direction right`, `--cwd ctx.cwd`, and `--no-focus`.
 - Parse command stdout as JSON and validate the returned pane ID before continuing. Report malformed or failed CLI output as an error.
-- Start `--kind pi` in that returned pane with a generated valid, unique handoff agent name. Do not pass a resume argument, so this is a fresh Pi session.
+- Start `--kind pi` in that returned pane with a generated valid, unique handoff agent name and pass `-- --model <captured-provider>/<captured-model-id>` as Pi's native arguments. Do not pass a resume argument, so this is a fresh Pi session.
+- Preserve provider and model exactly as selected at invocation. Do not substitute the configured default model, use a fuzzy model pattern, or add thinking-level propagation in version one.
 - Once `agent start` succeeds, send the approved text with `pane send-text`. Do not send Enter and do not call `agent prompt`.
 - Notify the user with the target pane ID when the editable draft is ready.
 - On any post-approval failure, restore the approved text to the source editor. When a split already succeeded, include the pane ID in the notification and leave cleanup to the user.
@@ -144,7 +148,8 @@ Connect the approved prompt to a fresh, ready Pi process in a right-hand Herdr s
 
 #### Manual Verification:
 - [ ] From a Pi pane in Herdr, accepting `/handoff <goal>` creates a right-hand sibling with the same working directory and does not steal focus from the source pane.
-- [ ] The successor process is a newly started Pi session, not a resumed source session.
+- [ ] The successor process is a newly started Pi session, not a resumed source session, and starts with the exact provider/model selected in the source immediately before `/handoff`.
+- [ ] Switching the source model immediately before `/handoff` changes both the generation model and the successor startup model.
 - [ ] The approved handoff text is visible in the successor editor and can be changed before submission.
 - [ ] The successor does not begin a model turn until the user explicitly presses Enter.
 - [ ] The source Pi session remains open, retains its transcript, and can continue independently.
@@ -163,12 +168,12 @@ Lock down the branch, error, and Herdr command contract with focused unit tests,
 ### Changes Required:
 
 #### 1. Extension command tests
-**File**: `agent/extensions/tests/handoff.test.cjs`
+**File**: `agent/extensions/handoff/handoff.test.cjs`
 **Changes**: Follow the existing `tailnet.test.cjs` Node test harness style. Transpile `handoff/index.ts`, capture the registered command, and mock the command context, nested model completion, UI, environment, and `pi.exec()` responses.
 
 Cover these cases:
 
-- Successful flow reconstructs branch input, opens the review editor, invokes split, starts `--kind pi`, then calls `pane send-text` with the edited result.
+- Successful flow reconstructs branch input, opens the review editor, invokes split, starts `--kind pi` with the captured exact `--model provider/model-id` argument, then calls `pane send-text` with the edited result.
 - The launch sequence uses `--current`, right direction, current working directory, `--no-focus`, and the exact pane ID returned by split.
 - Success never invokes `ctx.newSession()`, `agent prompt`, or a command that includes Enter.
 - Missing goal, non-TUI mode, missing model, missing Herdr environment, no usable history, cancelled generation, blank generation, and cancelled editor make no Herdr calls.
@@ -176,12 +181,12 @@ Cover these cases:
 
 #### 2. Usage documentation
 **File**: `README.md`
-**Changes**: Add `handoff` to the custom-extension list with its exact invocation, the Herdr requirement, the fact that it preserves the source session, and that the successor prompt remains an editable unsubmitted draft.
+**Changes**: Add `handoff` to the custom-extension list with its exact invocation, the Herdr requirement, source-session preservation, inheritance of the model selected when `/handoff` runs, and the fact that the successor prompt remains an editable unsubmitted draft.
 
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `node --test agent/extensions/tests/handoff.test.cjs` passes.
+- [ ] `node --test agent/extensions/handoff/handoff.test.cjs` passes.
 - [ ] `npm --prefix agent/extensions run typecheck` passes.
 - [ ] `git diff --check` passes.
 
@@ -200,7 +205,7 @@ Cover these cases:
 - Generation responses are reduced to text and blank or cancelled responses stop safely.
 - Herdr JSON parsing rejects absent or malformed pane IDs.
 - The generated agent name conforms to Herdr's naming rules and does not reuse a fixed name.
-- The command sequence and arguments preserve draft behavior by ending in `pane send-text`, not `agent prompt`.
+- The command sequence preserves the exact selected `provider/model-id` in Pi's native `--model` argument and draft behavior by ending in `pane send-text`, not `agent prompt`.
 - Every preflight, cancellation, and failure branch avoids unintended session replacement or prompt submission.
 
 ### Integration Tests:
@@ -211,7 +216,7 @@ Cover these cases:
 
 1. Start Pi inside Herdr in a repository with several turns of work, then run `/handoff <specific next task>`.
 2. Review and edit the generated prompt, then accept it.
-3. Confirm a right-side Pi pane opens in the same directory and that the prompt is present but unsubmitted.
+3. Switch the source session to a non-default model, then confirm the right-side Pi pane opens in the same directory with that exact model and the prompt present but unsubmitted.
 4. Edit the successor draft, submit it manually, and confirm it can act without the source transcript.
 5. Return to the source pane and confirm its session and editor remain usable.
 6. Repeat once after `/compact` and once with Herdr disabled to verify the compaction and preflight paths.

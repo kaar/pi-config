@@ -65,6 +65,7 @@ Reusable, invokable capabilities. See [docs/skills.md](docs/skills.md).
 
 - **commit-message** - Generates a commit message from staged changes (used by the pi-ai-commit wrapper script)
 - **review-staged-changes** - Reviews staged changes for bugs, security issues, and error handling gaps (P0-P3 priority)
+- **keep-a-changelog** - Sets up and maintains a human-readable `CHANGELOG.md` following Keep a Changelog 1.1.0
 
 
 ### Skill Locations

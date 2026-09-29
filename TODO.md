@@ -29,6 +29,8 @@ Example would be I have two different .worktrees with the different implementati
 
 ~~Still manages to do destructive git commands~~ Fixed: `git rm -f` / `git rm --force` added to `DESTRUCTIVE_GIT_PATTERNS`.
 
+Investigate why the git guard blocks `GIT_EDITOR=true git rebase --continue && git status --short --branch && git log --oneline -3` as interactive, and fix it if the classification is incorrect.
+
 ## Formatting of design spec markdowns
 
 I'm running into where design documents and other markdown documents are formatted by breaking line lengths.
@@ -144,3 +146,17 @@ No custom transformer is planned. The extension draft and its dependency were re
 - [Pi environment variables](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/environment-variables.md): `PI_HYPERLINKS` accepts `1`, `0`, or `auto`.
 - [Pi Markdown renderer](https://github.com/earendil-works/pi/blob/main/packages/tui/src/components/markdown.ts): the OSC 8 branch hides the target; the fallback prints it when it differs from the label.
 - [Herdr issue #2284](https://github.com/ogulcancelik/herdr/issues/2284): Herdr handles Ctrl-click while mouse capture is active. On macOS, Shift-Cmd-click bypasses Herdr to Ghostty. The issue also records missing hover feedback for OSC 8 destinations. With this workaround, Ctrl-click applies to visible HTTP(S) URLs rather than hidden Markdown targets.
+
+
+
+## Jev, Command completion
+
+When I run commands in Pi:
+!git status
+!git push
+!git s -c ...
+
+I would like Jev to monitor and suggest next command.
+There is already an example of this.
+
+Oh a

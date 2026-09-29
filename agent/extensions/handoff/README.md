@@ -8,17 +8,29 @@ Continue the current work in a fresh Pi session in a new Herdr pane. The source 
 
 ## How it works
 
-1. Waits for the agent to be idle, then captures the current model as `<provider>/<id>`.
-2. Generates a continuation prompt from the active branch with that model. After compaction, the branch is the latest summary plus the kept entries.
+1. Waits for the agent to be idle, then captures the implementation model as `<provider>/<id>` for the new session.
+2. Generates a continuation prompt with `openrouter/deepseek/deepseek-v4.1-flash:nitro`, independently of the implementation model. After compaction, the active branch is the latest summary plus the kept entries.
 3. Opens the prompt in an editor for review. Cancelling the loader or editor stops with no pane created.
 4. Runs `herdr` (or `HERDR_BIN_PATH`) without a shell:
    - `pane split --current --direction right --cwd <cwd> --no-focus`
    - `agent start handoff-<base36 time> --kind pi --pane <id> -- --model <provider>/<id>`
    - `pane send-text <id> <prompt>`, which pastes the prompt as a draft without pressing Enter
 
-If the launch fails, the prompt is restored to the source editor and the error says which pane (if any) was created. The pane is not closed automatically.
+The destination remains unfocused. Select its pane to review and edit the draft. Press Enter there to start work. The command never submits the draft.
 
-Not supported: thinking level carry-over, model fallback, other multiplexers, config, retries.
+If generation fails, the command reports the error without a new pane or a fallback model. If the split, startup, or paste fails, the command restores the reviewed prompt to the source editor. The error reports any known pane ID. The command does not close panes automatically.
+
+Not supported: thinking level carry-over, model fallback, other multiplexers, handoff-specific configuration, retries.
+
+## Generation requirements
+
+The source Pi process needs OpenRouter credentials and the base model `openrouter/deepseek/deepseek-v4.1-flash` in its model catalog. Normal Pi credential lookup applies, including `OPENROUTER_API_KEY`. If the catalog lacks the model, run `pi update --models`, then reload Pi.
+
+The command copies the base model for this request and adds `:nitro` to its ID. It preserves the model metadata and leaves the registry and global configuration unchanged. The request sets `reasoning: { enabled: false }`, replacing reasoning effort settings rather than merely hiding reasoning output.
+
+Nitro favors throughput and admits priority-tier endpoints, which can cost more. It does not guarantee a fixed generation time. The source and destination implementation models remain independent of this generation request.
+
+After extension changes, run `/reload` in Pi.
 
 ## Herdr and Pi notes
 
@@ -39,9 +51,14 @@ npm --prefix agent/extensions run typecheck
 
 Manual checks:
 
-- [ ] With a non-default model, the new pane shows the same model.
+- [ ] Generation uses DeepSeek V4.1 Flash with Nitro and `reasoning: { enabled: false }`, without an effort setting.
+- [ ] With a non-default implementation model, the new pane shows that same model.
 - [ ] The new pane opens unfocused on the right, in the same directory.
-- [ ] The prompt arrives as an unsubmitted draft, and the source session is unchanged.
+- [ ] The reviewed prompt arrives as an unsubmitted draft.
+- [ ] The draft contains the requested goal and relevant context. No destination model turn starts before explicit Enter.
+- [ ] The source transcript, session, and model remain unchanged.
 - [ ] Works after `/compact`. Refuses outside Herdr.
 - [ ] Cancelling the loader or editor creates no pane.
-- [ ] If the new Pi cannot resolve the model, the prompt is restored and the error names the pane.
+- [ ] An OpenRouter failure reports an error without a fallback model or new pane.
+- [ ] If the new Pi cannot resolve the implementation model, the prompt is restored and the error names the pane.
+- [ ] Compare three runs with the previous generator on the same branch and goal. Check for lower median generation time without missing critical facts. Measure generation separately from Pi startup.

@@ -4,11 +4,10 @@
  * Usage:
  *   /handoff implement phase one of the plan
  *
- * Generates a focused continuation prompt from the active branch, lets the user
- * edit it, opens an unfocused right-hand Herdr pane with a fresh Pi session, and
- * pastes the approved prompt there as an unsubmitted draft. The model selected
- * when /handoff runs is used for generation and for the new Pi session. The
- * source session is not changed.
+ * Generates a continuation prompt with DeepSeek V4.1 Flash through OpenRouter
+ * Nitro, with reasoning disabled. After source review, opens an unfocused
+ * right-hand Herdr pane and pastes the approved prompt as an unsubmitted draft.
+ * The new Pi session uses the captured source model. The source session is not changed.
  */
 
 import { type Message, uuidv7 } from "@earendil-works/pi-ai";
@@ -99,7 +98,7 @@ function generatePrompt(
 			finished = true;
 			done(result);
 		};
-		const loader = new BorderedLoader(tui, theme, "Generating handoff prompt...");
+		const loader = new BorderedLoader(tui, theme, "Generating handoff with DeepSeek V4.1 Flash (Nitro)...");
 		loader.onAbort = () => finish({ status: "cancelled" });
 
 		const userMessage: Message = {
@@ -116,7 +115,15 @@ function generatePrompt(
 			.complete(
 				model,
 				{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
-				{ signal: loader.signal, cacheRetention: "none", sessionId: uuidv7() },
+				{
+					signal: loader.signal,
+					cacheRetention: "none",
+					sessionId: uuidv7(),
+					onPayload: (payload: unknown) => ({
+						...(payload as Record<string, unknown>),
+						reasoning: { enabled: false },
+					}),
+				},
 			)
 			.then((response) => {
 				if (response.stopReason === "aborted") return finish({ status: "cancelled" });
@@ -215,7 +222,16 @@ export default function (pi: ExtensionAPI) {
 			}
 			const conversationText = serializeConversation(convertToLlm(messages));
 
-			const generation = await generatePrompt(ctx, model, conversationText, goal);
+			const baseGenerator = ctx.modelRegistry.find("openrouter", "deepseek/deepseek-v4.1-flash");
+			if (!baseGenerator) {
+				ctx.ui.notify(
+					"Handoff requires openrouter/deepseek/deepseek-v4.1-flash. Run `pi update --models`, then reload Pi.",
+					"error",
+				);
+				return;
+			}
+			const generator = { ...baseGenerator, id: `${baseGenerator.id}:nitro` };
+			const generation = await generatePrompt(ctx, generator, conversationText, goal);
 			if (generation.status === "cancelled") {
 				ctx.ui.notify("Handoff cancelled", "info");
 				return;

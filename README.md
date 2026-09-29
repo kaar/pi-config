@@ -48,7 +48,7 @@ Interactive sub-agent management (experimental, under evaluation).
 - **git-guard** - Safety checks for destructive git operations
 - **git-checkpoint** - Automatic git-based checkpoints
 - **todos** - Todo management within sessions
-- **handoff** - `/handoff <goal>` continues the current work in a fresh Pi session in a new Herdr pane, using the same model. The generated prompt is reviewed in an editor and arrives in the new pane as an unsubmitted draft. The source session is not changed. See [agent/extensions/handoff/README.md](agent/extensions/handoff/README.md).
+- **handoff** - `/handoff <goal>` generates a continuation prompt with DeepSeek V4.1 Flash through OpenRouter Nitro, with reasoning disabled. It requires OpenRouter credentials. Nitro can cost more. After source review, a new Herdr pane receives the prompt as an unsubmitted draft. The new Pi session uses the source implementation model. The source session is not changed. See [agent/extensions/handoff/README.md](agent/extensions/handoff/README.md).
 
 
 ## Prompts

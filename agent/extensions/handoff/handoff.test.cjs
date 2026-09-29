@@ -35,11 +35,13 @@ const message = (id, role, text) => ({
 const BRANCH = [message("m1", "user", "start the feature"), message("m2", "assistant", "planned it")];
 
 function harness(options = {}) {
-	const calls = { find: [], complete: [], loaderLabels: [], exec: [], editor: [], setEditorText: [], newSession: 0, sendUserMessage: 0 };
+	const calls = { find: [], complete: [], getKeys: [], loaderLabels: [], exec: [], editor: [], setEditorText: [], newSession: 0, sendUserMessage: 0 };
 	const notifications = [];
 	const commands = new Map();
 	let loader;
-	const exec = { split: SPLIT_OK, start: { code: 0, stdout: "{}", stderr: "" }, send: { code: 0, stdout: "", stderr: "" }, ...options.exec };
+	const ok = { code: 0, stdout: "", stderr: "" };
+	const exec = { split: SPLIT_OK, start: ok, send: ok, focus: ok, keys: ok, ...options.exec };
+	const externalKeys = options.externalKeys ?? ["ctrl+g"];
 
 	class BorderedLoader {
 		constructor(_tui, _theme, label) {
@@ -63,7 +65,8 @@ function harness(options = {}) {
 		sendUserMessage: () => calls.sendUserMessage++,
 		async exec(command, args) {
 			calls.exec.push({ command, args: Array.from(args) });
-			const key = { split: "split", start: "start", "send-text": "send" }[args[1]];
+			const key = { split: "split", start: "start", "send-text": "send", focus: "focus", "send-keys": "keys" }[args[1]];
+			await options.onExec?.(key);
 			return exec[key];
 		},
 	};
@@ -87,11 +90,15 @@ function harness(options = {}) {
 		},
 		ui: {
 			notify: (text, level) => notifications.push({ text, level }),
-			custom: (factory) => new Promise((resolve) => factory({}, {}, {}, resolve)),
+			custom: (factory) => new Promise((resolve) => factory({}, {}, {
+				getKeys: (action) => {
+					calls.getKeys.push(action);
+					return externalKeys;
+				},
+			}, resolve)),
 			editor: async (title, prefill) => {
 				calls.editor.push({ title, prefill });
-				options.onEditor?.();
-				return "editor" in options ? options.editor : `${prefill} (edited)`;
+				throw new Error("Source review must not open");
 			},
 			setEditorText: (text) => calls.setEditorText.push(text),
 		},
@@ -117,7 +124,19 @@ function harness(options = {}) {
 		},
 	});
 	exports.default(api);
-	const run = (args = "implement phase one") => commands.get("handoff").handler(args, ctx);
+	const run = async (args = "implement phase one") => {
+		await commands.get("handoff").handler(args, ctx);
+		assert.deepEqual(calls.editor, []);
+		assert.equal(calls.newSession, 0);
+		assert.equal(calls.sendUserMessage, 0);
+		for (const { args } of calls.exec) {
+			assert.ok(!["prompt", "run"].includes(args[1]), "must not submit a prompt");
+			if (args[1] === "send-keys") {
+				assert.deepEqual(args, ["agent", "send-keys", "w1:p2", externalKeys[0]]);
+				assert.ok(!args.slice(3).some((key) => /^(enter|return)$/i.test(key)));
+			}
+		}
+	};
 	return { calls, ctx, notifications, run };
 }
 
@@ -128,7 +147,7 @@ function assertNoSideEffects(h) {
 	assert.equal(h.calls.sendUserMessage, 0);
 }
 
-test("successful handoff generates with Nitro, reviews, and pastes an unsubmitted draft", async () => {
+test("successful handoff generates, pastes, focuses, and sends only the external-editor shortcut", async () => {
 	const h = harness();
 	await h.run("  implement phase one  ");
 
@@ -150,7 +169,8 @@ test("successful handoff generates with Nitro, reviews, and pastes an unsubmitte
 	assert.equal(requestOptions.sessionId, "session-id");
 	assert.ok(requestOptions.signal);
 
-	assert.deepEqual(h.calls.editor, [{ title: "Edit handoff prompt", prefill: "Generated prompt" }]);
+	assert.deepEqual(h.calls.editor, []);
+	assert.deepEqual(h.calls.getKeys, ["app.editor.external"]);
 	const name = `handoff-${NOW.toString(36)}`;
 	assert.match(name, /^[a-z][a-z0-9_-]{0,31}$/);
 	assert.deepEqual(h.calls.exec, [
@@ -159,19 +179,54 @@ test("successful handoff generates with Nitro, reviews, and pastes an unsubmitte
 			command: "/bin/herdr",
 			args: ["agent", "start", name, "--kind", "pi", "--pane", "w1:p2", "--", "--model", "test-provider/test-model"],
 		},
-		{ command: "/bin/herdr", args: ["pane", "send-text", "w1:p2", "Generated prompt (edited)"] },
+		{ command: "/bin/herdr", args: ["pane", "send-text", "w1:p2", "Generated prompt"] },
+		{ command: "/bin/herdr", args: ["agent", "focus", "w1:p2"] },
+		{ command: "/bin/herdr", args: ["agent", "send-keys", "w1:p2", "ctrl+g"] },
 	]);
-	for (const { args } of h.calls.exec) {
-		assert.ok(!args.includes("prompt") && !args.includes("run") && !args.includes("send-keys"));
-		assert.ok(!args.some((arg) => /enter/i.test(arg)));
-	}
 	assert.equal(h.calls.setEditorText.length, 0);
 	assert.equal(h.calls.newSession, 0);
 	assert.equal(h.calls.sendUserMessage, 0);
 	assert.deepEqual(h.notifications.at(-1), {
-		text: "Handoff draft ready in pane w1:p2. Review it there and press Enter to start.",
+		text: "Handoff draft transferred to pane w1:p2. External-editor shortcut sent. Save and close the editor, then press Enter in Pi.",
 		level: "info",
 	});
+});
+
+test("each Herdr command completes before the next command starts", async () => {
+	let pending = false;
+	const completed = [];
+	const h = harness({
+		onExec: async (key) => {
+			assert.equal(pending, false);
+			pending = true;
+			await new Promise(setImmediate);
+			completed.push(key);
+			pending = false;
+		},
+	});
+	await h.run();
+	assert.deepEqual(completed, ["split", "start", "send", "focus", "keys"]);
+	assert.equal(pending, false);
+	assert.equal(h.notifications.at(-1).level, "info");
+});
+
+test("first configured external-editor shortcut replaces ctrl+g", async () => {
+	const h = harness({ externalKeys: ["ctrl+shift+e", "alt+e"] });
+	await h.run();
+	assert.equal(h.calls.exec.length, 5);
+	assert.deepEqual(h.calls.exec[4].args, ["agent", "send-keys", "w1:p2", "ctrl+shift+e"]);
+	assert.equal(h.calls.setEditorText.length, 0);
+});
+
+test("disabled external-editor binding preserves transfer and focus without sending keys", async () => {
+	const h = harness({ externalKeys: [] });
+	await h.run();
+	assert.deepEqual(h.calls.exec.map(({ args }) => args.slice(0, 2)), [
+		["pane", "split"], ["agent", "start"], ["pane", "send-text"], ["agent", "focus"],
+	]);
+	assert.equal(h.calls.setEditorText.length, 0);
+	assert.equal(h.notifications.at(-1).level, "warning");
+	assert.match(h.notifications.at(-1).text, /transferred to pane w1:p2.*app\.editor\.external has no binding/);
 });
 
 test("model selected when the source settles affects only successor startup", async () => {
@@ -188,7 +243,6 @@ test("model switches after invocation do not affect generation or successor star
 			h.ctx.model = OTHER_MODEL;
 			return Promise.resolve({ stopReason: "stop", content: [{ type: "text", text: "Generated prompt" }] });
 		},
-		onEditor: () => (h.ctx.model = undefined),
 	});
 	await h.run();
 	assert.equal(h.calls.complete[0].model.provider, "openrouter");
@@ -211,6 +265,13 @@ test("request payload disables reasoning and replaces all nested reasoning setti
 	assert.equal(requestOptions.reasoning, undefined);
 	assert.equal(requestOptions.reasoningEffort, undefined);
 	assert.equal(requestOptions.maxTokens, undefined);
+});
+
+test("long multiline Unicode and code blocks reach send-text unchanged", async () => {
+	const prompt = `## Context\n${"Keep café, 日本語, and λ intact.\n".repeat(1000)}\n\`\`\`ts\nconst goal = "next task";\n\`\`\`\nFinal line`;
+	const h = harness({ response: { stopReason: "stop", content: [{ type: "text", text: prompt }] } });
+	await h.run();
+	assert.deepEqual(h.calls.exec[2].args, ["pane", "send-text", "w1:p2", prompt]);
 });
 
 test("herdr defaults to the PATH binary when HERDR_BIN_PATH is unset", async () => {
@@ -271,8 +332,6 @@ for (const [label, options, level, pattern] of [
 	["blank response", { response: { stopReason: "stop", content: [{ type: "text", text: "  \n" }] } }, "error", /empty prompt/],
 	["error response", { response: { stopReason: "error", errorMessage: "context too long", content: [] } }, "error", /context too long/],
 	["rejected request", { onComplete: () => Promise.reject(new Error("network down")) }, "error", /network down/],
-	["cancelled editor", { editor: undefined }, "info", /cancelled/],
-	["emptied editor", { editor: "  " }, "info", /cancelled/],
 	[
 		"loader cancellation followed by a late successful response",
 		{ onComplete: (getLoader) => new Promise((resolve) => setImmediate(() => { getLoader().abort(); resolve({ stopReason: "stop", content: [{ type: "text", text: "Too late" }] }); })) },
@@ -299,14 +358,40 @@ for (const [label, exec, execCount, pattern] of [
 	["start failure", { start: failure }, 2, /herdr agent start failed: .*it broke.*Pane w1:p2 was created/],
 	["send failure", { send: failure }, 3, /herdr pane send-text failed: .*it broke.*Pane w1:p2 was created/],
 ]) {
-	test(`${label} restores the approved prompt and reports the error`, async () => {
+	test(`${label} restores the generated prompt and reports the error`, async () => {
 		const h = harness({ exec });
 		await h.run();
 		assert.equal(h.calls.exec.length, execCount);
-		assert.deepEqual(h.calls.setEditorText, ["Generated prompt (edited)"]);
+		assert.deepEqual(h.calls.setEditorText, ["Generated prompt"]);
 		assert.equal(h.notifications.at(-1).level, "error");
 		assert.match(h.notifications.at(-1).text, pattern);
 		assert.match(h.notifications.at(-1).text, /restored to the editor/);
 		assert.equal(h.calls.newSession, 0);
 	});
+}
+
+for (const [stage, key, execCount, pattern] of [
+	["focus", "focus", 4, /focus failed: .*herdr agent focus failed.*Select that pane and open Pi's external editor manually/],
+	["shortcut", "keys", 5, /shortcut delivery failed: .*herdr agent send-keys failed.*Review the draft in that pane manually/],
+]) {
+	for (const rejects of [false, true]) {
+		test(`${stage} ${rejects ? "rejection" : "failure"} preserves the destination draft without source recovery`, async () => {
+			const h = harness({
+				externalKeys: ["ctrl+shift+e", "ctrl+g"],
+				exec: { [key]: failure },
+				onExec: rejects ? async (current) => {
+					if (current === key) throw new Error("CLI unavailable");
+				} : undefined,
+			});
+			await h.run();
+			assert.equal(h.calls.exec.length, execCount);
+			assert.deepEqual(h.calls.exec[2].args, ["pane", "send-text", "w1:p2", "Generated prompt"]);
+			assert.deepEqual(h.calls.setEditorText, []);
+			assert.equal(h.notifications.length, 1);
+			assert.equal(h.notifications[0].level, "warning");
+			assert.match(h.notifications[0].text, /Handoff draft transferred to pane w1:p2/);
+			assert.match(h.notifications[0].text, rejects ? /CLI unavailable/ : pattern);
+			assert.doesNotMatch(h.notifications[0].text, /restored|shortcut sent|editor opened/i);
+		});
+	}
 }

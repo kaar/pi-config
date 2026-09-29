@@ -5,9 +5,10 @@
  *   /handoff implement phase one of the plan
  *
  * Generates a continuation prompt with DeepSeek V4.1 Flash through OpenRouter
- * Nitro, with reasoning disabled. After source review, opens an unfocused
- * right-hand Herdr pane and pastes the approved prompt as an unsubmitted draft.
- * The new Pi session uses the captured source model. The source session is not changed.
+ * Nitro, with reasoning disabled. Pastes the prompt into a fresh Pi session,
+ * focuses its right-hand Herdr pane, and sends Pi's external-editor shortcut.
+ * The new session uses the captured source model. Saving and closing the editor
+ * returns to an unsubmitted draft. The source session is not changed.
  */
 
 import { type Message, uuidv7 } from "@earendil-works/pi-ai";
@@ -16,7 +17,10 @@ import { BorderedLoader, convertToLlm, serializeConversation } from "@earendil-w
 
 type AgentMessage = Parameters<typeof convertToLlm>[0][number];
 type Model = NonNullable<ExtensionCommandContext["model"]>;
-type Generation = { status: "ok"; text: string } | { status: "cancelled" } | { status: "error"; message: string };
+type Generation =
+	| { status: "ok"; text: string; externalEditorKey: string | undefined }
+	| { status: "cancelled" }
+	| { status: "error"; message: string };
 
 const SYSTEM_PROMPT = `You are a context transfer assistant. Given a conversation history and the user's goal for a new thread, write a focused prompt that starts a fresh coding agent session.
 
@@ -91,7 +95,8 @@ function generatePrompt(
 	conversationText: string,
 	goal: string,
 ): Promise<Generation> {
-	return ctx.ui.custom<Generation>((tui, theme, _keybindings, done) => {
+	return ctx.ui.custom<Generation>((tui, theme, keybindings, done) => {
+		const externalEditorKey = keybindings.getKeys("app.editor.external")[0];
 		let finished = false;
 		const finish = (result: Generation) => {
 			if (finished) return;
@@ -135,7 +140,7 @@ function generatePrompt(
 					.map((block) => block.text)
 					.join("\n")
 					.trim();
-				finish(text ? { status: "ok", text } : { status: "error", message: "model returned an empty prompt" });
+				finish(text ? { status: "ok", text, externalEditorKey } : { status: "error", message: "model returned an empty prompt" });
 			})
 			.catch((error) => finish({ status: "error", message: errorText(error) }));
 
@@ -168,6 +173,7 @@ async function launchSuccessor(
 	ctx: ExtensionCommandContext,
 	modelRef: string,
 	prompt: string,
+	externalEditorKey: string | undefined,
 ): Promise<void> {
 	let paneId: string | undefined;
 	try {
@@ -186,7 +192,37 @@ async function launchSuccessor(
 		ctx.ui.notify(`Handoff failed: ${errorText(error)}. ${pane} The prompt was restored to the editor.`, "error");
 		return;
 	}
-	ctx.ui.notify(`Handoff draft ready in pane ${paneId}. Review it there and press Enter to start.`, "info");
+
+	// The destination now owns the draft. UI failures must not restore a duplicate in the source.
+	try {
+		await herdr(pi, ["agent", "focus", paneId]);
+	} catch (error) {
+		ctx.ui.notify(
+			`Handoff draft transferred to pane ${paneId}, but focus failed: ${errorText(error)}. Select that pane and open Pi's external editor manually.`,
+			"warning",
+		);
+		return;
+	}
+	if (!externalEditorKey) {
+		ctx.ui.notify(
+			`Handoff draft transferred to pane ${paneId}. Automatic editor opening is unavailable because app.editor.external has no binding. Review the draft in Pi, then press Enter.`,
+			"warning",
+		);
+		return;
+	}
+	try {
+		await herdr(pi, ["agent", "send-keys", paneId, externalEditorKey]);
+	} catch (error) {
+		ctx.ui.notify(
+			`Handoff draft transferred to pane ${paneId}, but external-editor shortcut delivery failed: ${errorText(error)}. Review the draft in that pane manually.`,
+			"warning",
+		);
+		return;
+	}
+	ctx.ui.notify(
+		`Handoff draft transferred to pane ${paneId}. External-editor shortcut sent. Save and close the editor, then press Enter in Pi.`,
+		"info",
+	);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -241,14 +277,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			const edited = await ctx.ui.editor("Edit handoff prompt", generation.text);
-			const prompt = edited?.trim();
-			if (!prompt) {
-				ctx.ui.notify("Handoff cancelled", "info");
-				return;
-			}
-
-			await launchSuccessor(pi, ctx, modelRef, prompt);
+			await launchSuccessor(pi, ctx, modelRef, generation.text, generation.externalEditorKey);
 		},
 	});
 }

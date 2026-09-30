@@ -49,6 +49,19 @@ Files involved:
 ## Task
 [Clear description of what to do next based on the user's goal]`;
 
+function selectModelByPriceRank(scopedModels: ExtensionCommandContext["scopedModels"], score: number): Model | undefined {
+	if (scopedModels.length === 0 || !Number.isFinite(score)) return undefined;
+	if (scopedModels.some(({ model }) => !Number.isFinite(model.cost?.output) || model.cost.output < 0)) {
+		return undefined;
+	}
+
+	// Sort a copy. Stable sorting preserves scope order for equal output prices.
+	const sorted = [...scopedModels].sort((a, b) => a.model.cost.output - b.model.cost.output);
+	const clampedScore = Math.max(0, Math.min(3, score));
+	const index = Math.round((clampedScore / 3) * (sorted.length - 1));
+	return sorted[index].model;
+}
+
 function entryToMessage(entry: SessionEntry): AgentMessage | undefined {
 	if (entry.type === "message") return entry.message;
 	if (entry.type === "compaction") {

@@ -105,7 +105,7 @@ function harness(options = {}) {
 	};
 
 	const exports = {};
-	runInNewContext(compiled, {
+	runInNewContext(`${compiled}\nexports.selectModelByPriceRank = selectModelByPriceRank;`, {
 		exports,
 		process: { env: options.env ?? HERDR_ENV },
 		Date: class extends Date {
@@ -137,8 +137,144 @@ function harness(options = {}) {
 			}
 		}
 	};
-	return { calls, ctx, notifications, run };
+	return { calls, ctx, notifications, run, selectModelByPriceRank: exports.selectModelByPriceRank };
 }
+
+function scopedModel(provider, id, output, thinkingLevel) {
+	return Object.freeze({
+		model: Object.freeze({ provider, id, cost: Object.freeze({ input: 1, output, cacheRead: 1, cacheWrite: 1 }) }),
+		thinkingLevel,
+	});
+}
+
+for (const [label, prices, score, expectedIndex] of [
+	["empty scope", [], 1.5, undefined],
+	["single model at minimum", [7], 0, 0],
+	["single model at midpoint", [7], 1.5, 0],
+	["single model at maximum", [7], 3, 0],
+	["unsorted minimum", [20, 1, 5], 0, 1],
+	["unsorted midpoint", [20, 1, 5], 1.5, 2],
+	["unsorted maximum", [20, 1, 5], 3, 0],
+	["rank rather than dollar interpolation", [1, 2, 1000], 1.5, 1],
+	["equal prices first", [7, 7, 7], 0, 0],
+	["equal prices middle", [7, 7, 7], 1.5, 1],
+	["equal prices last", [7, 7, 7], 3, 2],
+	["zero price", [5, 0, 2], 0, 1],
+	["all zero prices", [0, 0, 0], 1.5, 1],
+	["clamp below zero", [20, 1, 5], -100, 1],
+	["clamp above three", [20, 1, 5], 100, 0],
+	["two-model midpoint rounds up", [1, 5], 1.5, 1],
+	["NaN score", [1, 5], NaN, undefined],
+	["positive infinite score", [1, 5], Infinity, undefined],
+	["negative infinite score", [1, 5], -Infinity, undefined],
+	["single model still rejects nonfinite score", [1], NaN, undefined],
+	["numeric string score", [1, 5], "1.5", undefined],
+	["missing score", [1, 5], undefined, undefined],
+]) {
+	test(`price rank: ${label}`, () => {
+		const scope = Object.freeze(prices.map((price, i) => scopedModel("test", `model-${i}`, price)));
+		const before = structuredClone(scope);
+		assert.equal(harness().selectModelByPriceRank(scope, score), scope[expectedIndex]?.model);
+		assert.deepEqual(scope, before);
+	});
+}
+
+for (const [label, cost] of [
+	["missing cost", undefined],
+	["null cost", null],
+	["missing output", {}],
+	["undefined output", { output: undefined }],
+	["null output", { output: null }],
+	["string output", { output: "5" }],
+	["boolean output", { output: false }],
+	["negative output", { output: -1 }],
+	["NaN output", { output: NaN }],
+	["positive infinite output", { output: Infinity }],
+	["negative infinite output", { output: -Infinity }],
+]) {
+	test(`price rank rejects the entire scope: ${label}`, () => {
+		const invalid = Object.freeze({ model: Object.freeze({ provider: "test", id: "invalid", cost: Object.freeze(cost) }) });
+		const valid = scopedModel("test", "valid", 0);
+		const select = harness().selectModelByPriceRank;
+		for (const entries of [[invalid], [valid, invalid], [invalid, valid]]) {
+			const scope = Object.freeze(entries);
+			for (const score of [0, 1.5, 3]) assert.equal(select(scope, score), undefined);
+		}
+	});
+}
+
+// Fixed snapshot in configured scope order, not a lookup of live settings or catalog prices.
+const ELEVEN_MODELS = Object.freeze([
+	["openai-codex", "gpt-5.6-terra", 12],
+	["openrouter", "deepseek/deepseek-v4.1-flash", 0.396],
+	["openai-codex", "gpt-6-astra", 50],
+	["anthropic", "claude-fable-5-1", 50],
+	["github-copilot", "gpt-5.6-terra", 12],
+	["github-copilot", "claude-sonnet-5", 10],
+	["github-copilot", "gemini-3.5-flash", 9],
+	["github-copilot", "claude-haiku-4.5", 5],
+	["openrouter", "deepseek/deepseek-v4-pro-0813", 1.98],
+	["openai-codex", "gpt-5.6-sol", 20],
+	["anthropic", "claude-opus-5-5", 20],
+].map(([provider, id, price]) => scopedModel(provider, id, price)));
+const PRICE_RANKS = [1, 8, 7, 6, 5, 0, 4, 9, 10, 2, 3];
+
+for (const [rank, scopeIndex] of PRICE_RANKS.entries()) {
+	test(`price rank: 11-model fixture rank ${rank}`, () => {
+		const before = structuredClone(ELEVEN_MODELS);
+		assert.equal(harness().selectModelByPriceRank(ELEVEN_MODELS, rank * 0.3), ELEVEN_MODELS[scopeIndex].model);
+		assert.deepEqual(ELEVEN_MODELS, before);
+	});
+}
+
+for (const [score, rank] of [[0, 0], [0.46, 2], [1, 3], [1.02, 3], [1.64, 5], [1.79, 6], [2, 7], [2.25, 8], [3, 10]]) {
+	test(`price rank: spec example ${score}`, () => {
+		assert.equal(harness().selectModelByPriceRank(ELEVEN_MODELS, score), ELEVEN_MODELS[PRICE_RANKS[rank]].model);
+	});
+}
+
+// The specified JS formula falls just below the mathematical midpoint at 0.15 and 1.65.
+// Preserve its exact arithmetic, without adding an epsilon or rounding the score first.
+for (const [boundary, lowerRank, atRank] of [
+	[0.15, 0, 0], [0.45, 1, 2], [0.75, 2, 3], [1.05, 3, 4], [1.35, 4, 5],
+	[1.65, 5, 5], [1.95, 6, 7], [2.25, 7, 8], [2.55, 8, 9], [2.85, 9, 10],
+]) {
+	test(`price rank: before, at, and after boundary ${boundary}`, () => {
+		const select = harness().selectModelByPriceRank;
+		for (const [score, rank] of [[boundary - 1e-12, lowerRank], [boundary, atRank], [boundary + 1e-12, lowerRank + 1]]) {
+			assert.equal(select(ELEVEN_MODELS, score), ELEVEN_MODELS[PRICE_RANKS[rank]].model, `score ${score}`);
+		}
+	});
+}
+
+test("price rank ignores thinkingLevel", () => {
+	const select = harness().selectModelByPriceRank;
+	for (const level of [undefined, "off", "low", "medium", "high", "xhigh"]) {
+		const scope = Object.freeze(ELEVEN_MODELS.map((entry, i) => Object.freeze({
+			model: entry.model,
+			thinkingLevel: i % 2 ? level : "high",
+		})));
+		for (const [rank, scopeIndex] of PRICE_RANKS.entries()) {
+			assert.equal(select(scope, rank * 0.3), ELEVEN_MODELS[scopeIndex].model);
+		}
+	}
+});
+
+test("price rank uses only base output price", () => {
+	const scope = Object.freeze(ELEVEN_MODELS.map(({ model }, i) => Object.freeze({
+		model: Object.freeze({
+			...model,
+			cost: Object.freeze({
+				output: model.cost.output, input: NaN, cacheRead: -1, cacheWrite: Infinity,
+				tiers: Object.freeze([Object.freeze({ inputTokensAbove: 1000, output: 100 - i, input: 1, cacheRead: 1, cacheWrite: 1 })]),
+			}),
+		}),
+	})));
+	const select = harness().selectModelByPriceRank;
+	for (const [rank, scopeIndex] of PRICE_RANKS.entries()) {
+		assert.equal(select(scope, rank * 0.3), scope[scopeIndex].model);
+	}
+});
 
 function assertNoSideEffects(h) {
 	assert.equal(h.calls.exec.length, 0);

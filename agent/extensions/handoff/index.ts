@@ -12,9 +12,11 @@
  * returns to an unsubmitted draft. The source session is not changed.
  */
 
-import { type Message, uuidv7 } from "@earendil-works/pi-ai";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { type ClassifierContext, type ClassifierResult, type Message, uuidv7 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { BorderedLoader, convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
+import { BorderedLoader, convertToLlm, getAgentDir, serializeConversation } from "@earendil-works/pi-coding-agent";
 
 type AgentMessage = Parameters<typeof convertToLlm>[0][number];
 type Model = NonNullable<ExtensionCommandContext["model"]>;
@@ -109,6 +111,19 @@ function errorText(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+function appendClassificationLog(record: Record<string, unknown>): void {
+	try {
+		const directory = join(getAgentDir(), "logs");
+		mkdirSync(directory, { recursive: true, mode: 0o700 });
+		// Preserve nonfinite values as strings rather than silently converting them to null.
+		const line = JSON.stringify(record, (_key, value) =>
+			typeof value === "number" && !Number.isFinite(value) ? String(value) : value);
+		appendFileSync(join(directory, "handoff-classifications.jsonl"), `${line}\n`, { encoding: "utf8", mode: 0o600 });
+	} catch (error) {
+		console.error(`Handoff classification log write failed: ${errorText(error)}`);
+	}
+}
+
 function prepareHandoff(
 	ctx: ExtensionCommandContext,
 	model: Model,
@@ -171,21 +186,42 @@ function prepareHandoff(
 					.trim();
 				if (!text) return finish({ status: "error", message: "model returned an empty prompt" });
 
-				const fallback = (reason: string) => finish({
-					status: "ok", text, externalEditorKey, modelRef: sourceModelRef,
-					notification: {
-						text: `Handoff: Jev selection unavailable (${reason}). Using source model ${sourceModelRef}.`,
-						level: "warning",
-					},
-				});
-				if (scopedModels.length === 0) return fallback("no scoped models");
-				// A finite probe score validates prices before any classifier work.
-				if (!selectModelByPriceRank(scopedModels, 0)) return fallback("invalid output prices");
+				const startedAt = Date.now();
+				const sessionId = ctx.sessionManager.getSessionId();
+				const sessionFile = ctx.sessionManager.getSessionFile();
+				const candidates = scopedModels.map(({ model }, scopeIndex) => ({
+					scopeIndex, modelRef: `${model.provider}/${model.id}`, outputPrice: model.cost?.output,
+				}));
+				let rankedCandidates: typeof candidates | null = null;
+				let request: ClassifierContext | null = null;
+				let result: ClassifierResult | null = null;
+				let error: string | null = null;
+				let decision: {
+					outcome: "selected" | "fallback" | "cancelled";
+					modelRef: string | null;
+					reason: string;
+					score?: number;
+					rank?: number;
+				} = { outcome: "cancelled", modelRef: null, reason: "handoff cancelled" };
+				const fallback = (reason: string) => {
+					decision = { outcome: "fallback", modelRef: sourceModelRef, reason };
+					finish({
+						status: "ok", text, externalEditorKey, modelRef: sourceModelRef,
+						notification: {
+							text: `Handoff: Jev selection unavailable (${reason}). Using source model ${sourceModelRef}.`,
+							level: "warning",
+						},
+					});
+				};
 				try {
+					if (scopedModels.length === 0) return fallback("no scoped models");
+					// A finite probe score validates prices before any classifier work.
+					if (!selectModelByPriceRank(scopedModels, 0)) return fallback("invalid output prices");
+					rankedCandidates = [...candidates].sort((a, b) => a.outputPrice - b.outputPrice);
 					const jev = ctx.modelRegistry.getModelOfType("classifier", "typesafe", "jev-latest");
 					if (cancelled()) return;
 					if (!jev) return fallback("Jev not in catalog");
-					const result = await ctx.modelRegistry.classify(jev, {
+					request = {
 						state: { prompt: text },
 						questions: {
 							difficulty: {
@@ -199,7 +235,8 @@ function prepareHandoff(
 								],
 							},
 						},
-					}, { signal: loader.signal });
+					};
+					result = await ctx.modelRegistry.classify(jev, request, { signal: loader.signal });
 					if (cancelled()) return;
 					if (result?.stopReason === "aborted") return finish({ status: "cancelled" });
 					if (result?.stopReason !== "stop") return fallback("classification failed");
@@ -209,6 +246,11 @@ function prepareHandoff(
 					const selected = selectModelByPriceRank(scopedModels, score);
 					if (!selected) return fallback("invalid output prices");
 					const modelRef = `${selected.provider}/${selected.id}`;
+					decision = {
+						outcome: "selected", modelRef, score,
+						rank: Math.round((score / 3) * (rankedCandidates.length - 1)),
+						reason: "Output-price rank: Math.round((score / 3) * (candidateCount - 1)); stable ties; confidence ignored",
+					};
 					finish({
 						status: "ok", text, externalEditorKey, modelRef,
 						notification: {
@@ -216,8 +258,17 @@ function prepareHandoff(
 							level: "info",
 						},
 					});
-				} catch {
+				} catch (caught) {
+					error = errorText(caught);
 					if (!cancelled()) fallback("classification failed");
+				} finally {
+					// Late responses are logged as cancelled, without another notification or launch.
+					appendClassificationLog({
+						timestamp: new Date(startedAt).toISOString(), durationMs: Date.now() - startedAt,
+						sessionId, sessionFile, cwd: ctx.cwd, classifier: "typesafe/jev-latest",
+						sourceModel: sourceModelRef, candidates, rankedCandidates,
+						request, response: result ?? null, error, decision,
+					});
 				}
 			})
 			.catch((error) => {

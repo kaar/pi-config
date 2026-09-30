@@ -42,6 +42,9 @@ function harness(options = {}) {
 	const calls = { find: [], complete: [], getModelOfType: [], classify: [], getKeys: [], loaderLabels: [], exec: [], editor: [], setEditorText: [], newSession: 0, sendUserMessage: 0, setModel: 0 };
 	const notifications = [];
 	const events = [];
+	const logWrites = [];
+	const logDirectories = [];
+	const logErrors = [];
 	const commands = new Map();
 	let loader;
 	const ok = { code: 0, stdout: "", stderr: "" };
@@ -84,7 +87,11 @@ function harness(options = {}) {
 		cwd: "/work/project",
 		waitForIdle: async () => options.onIdle?.(),
 		newSession: async () => calls.newSession++,
-		sessionManager: { getBranch: () => options.branch ?? BRANCH },
+		sessionManager: {
+			getBranch: () => options.branch ?? BRANCH,
+			getSessionId: () => "source-session-id",
+			getSessionFile: () => "/test/sessions/source.jsonl",
+		},
 		modelRegistry: {
 			find(provider, id) {
 				calls.find.push({ provider, id });
@@ -130,6 +137,7 @@ function harness(options = {}) {
 	const exports = {};
 	runInNewContext(`${compiled}\nexports.selectModelByPriceRank = selectModelByPriceRank;`, {
 		exports,
+		console: { error: (message) => logErrors.push(message) },
 		process: { env: options.env ?? HERDR_ENV },
 		Date: class extends Date {
 			static now() {
@@ -137,10 +145,22 @@ function harness(options = {}) {
 			}
 		},
 		require(name) {
+			if (name === "node:path") return { join };
+			if (name === "node:fs") return {
+				mkdirSync(path, settings) {
+					if (options.logFailure === "mkdir") throw new Error("permission denied");
+					logDirectories.push({ path, settings: { ...settings } });
+				},
+				appendFileSync(path, data, settings) {
+					if (options.logFailure === "append") throw new Error("disk full");
+					logWrites.push({ path, data, settings: { ...settings } });
+				},
+			};
 			if (name === "@earendil-works/pi-ai") return { uuidv7: () => "session-id" };
 			assert.equal(name, "@earendil-works/pi-coding-agent");
 			return {
 				BorderedLoader,
+				getAgentDir: () => options.agentDir ?? "/test/agent",
 				convertToLlm: (messages) => messages,
 				serializeConversation: (messages) => JSON.stringify(messages),
 			};
@@ -162,7 +182,10 @@ function harness(options = {}) {
 			}
 		}
 	};
-	return { calls, ctx, notifications, events, run, getLoader: () => loader, selectModelByPriceRank: exports.selectModelByPriceRank };
+	return {
+		calls, ctx, notifications, events, run, getLoader: () => loader, selectModelByPriceRank: exports.selectModelByPriceRank,
+		logWrites, logDirectories, logErrors, logs: () => logWrites.map(({ data }) => JSON.parse(data)),
+	};
 }
 
 function scopedModel(provider, id, output, thinkingLevel) {
@@ -429,6 +452,12 @@ for (const [label, options, reason, lookups, classifications] of [
 		assert.deepEqual(h.calls.setEditorText, []);
 		assert.ok(h.events.indexOf("loader-done") < h.events.indexOf("notify:warning"));
 		assert.ok(h.events.indexOf("notify:warning") < h.events.indexOf("exec:split"));
+		assert.equal(h.logs().length, 1);
+		const [log] = h.logs();
+		assert.deepEqual(log.decision, { outcome: "fallback", modelRef: "test-provider/test-model", reason });
+		assert.equal(log.request === null, classifications === 0);
+		if (options.classification?.errorMessage) assert.equal(log.response.errorMessage, options.classification.errorMessage);
+		if (options.onLookup || options.onClassify) assert.match(log.error, /lookup failed|provider failed|network down/);
 	});
 }
 
@@ -548,6 +577,15 @@ for (const late of ["success", "error", "rejection"]) {
 			assert.equal(h.calls.getModelOfType.length, stage === "generation" ? 0 : 1);
 			assert.equal(h.calls.classify.length, stage === "generation" ? 0 : 1);
 			assert.equal(h.events.filter((event) => event === "loader-done").length, 1);
+			assert.equal(h.logs().length, stage === "generation" ? 0 : 1);
+			if (stage === "classification") {
+				const [log] = h.logs();
+				assert.deepEqual(log.decision, { outcome: "cancelled", modelRef: null, reason: "handoff cancelled" });
+				assert.deepEqual(log.request, structuredClone(h.calls.classify[0].context));
+				if (late === "success") assert.deepEqual(log.response, classification());
+				if (late === "error") assert.equal(log.response.errorMessage, "too late");
+				if (late === "rejection") assert.match(log.error, /too late/);
+			}
 		});
 	}
 }
@@ -576,6 +614,74 @@ for (const [label, options, classifyCount] of [
 		assertNoSideEffects(h);
 		assert.equal(h.calls.classify.length, classifyCount);
 		assert.deepEqual(h.notifications, [{ text: "Handoff cancelled", level: "info" }]);
+	});
+}
+
+test("classification log appends full requests and answers with the price-rank decision", async () => {
+	const prompt = "Review café\n日本語 and `code`.\nFinal line";
+	const result = { ...classification(2.249, 0.01), usage: { input: 123, output: 0, totalTokens: 123, cost: { total: 0.01 } } };
+	const h = harness({
+		agentDir: "/custom/pi-agent",
+		env: { ...HERDR_ENV, TYPESAFE_API_KEY: "secret-not-for-logging" },
+		classification: result,
+		response: { stopReason: "stop", content: [{ type: "text", text: `  ${prompt}  ` }] },
+	});
+	await h.run();
+	await h.run();
+	assert.equal(h.logWrites.length, 2);
+	assert.deepEqual(h.logErrors, []);
+	for (const directory of h.logDirectories) {
+		assert.deepEqual(directory, { path: "/custom/pi-agent/logs", settings: { recursive: true, mode: 0o700 } });
+	}
+	for (const write of h.logWrites) {
+		assert.equal(write.path, "/custom/pi-agent/logs/handoff-classifications.jsonl");
+		assert.deepEqual(write.settings, { encoding: "utf8", mode: 0o600 });
+		assert.equal(write.data.split("\n").length, 2, "one JSONL line even for multiline prompts");
+		assert.doesNotMatch(write.data, /secret-not-for-logging|TYPESAFE_API_KEY|signal/);
+	}
+	for (const log of h.logs()) {
+		assert.equal(log.timestamp, new Date(NOW).toISOString());
+		assert.equal(log.durationMs, 0);
+		assert.equal(log.sessionId, "source-session-id");
+		assert.equal(log.sessionFile, "/test/sessions/source.jsonl");
+		assert.equal(log.cwd, "/work/project");
+		assert.equal(log.classifier, "typesafe/jev-latest");
+		assert.equal(log.sourceModel, "test-provider/test-model");
+		assert.deepEqual(log.request, structuredClone(h.calls.classify[0].context));
+		assert.equal(log.request.state.prompt, prompt);
+		assert.deepEqual(log.response, result);
+		assert.equal(log.error, null);
+		assert.deepEqual(log.candidates, ELEVEN_MODELS.map(({ model }, scopeIndex) => ({
+			scopeIndex, modelRef: `${model.provider}/${model.id}`, outputPrice: model.cost.output,
+		})));
+		assert.deepEqual(log.rankedCandidates, PRICE_RANKS.map((i) => log.candidates[i]));
+		assert.equal(log.decision.outcome, "selected");
+		assert.equal(log.decision.modelRef, "openai-codex/gpt-5.6-sol");
+		assert.equal(log.decision.score, 2.249);
+		assert.equal(log.decision.rank, 7);
+		assert.match(log.decision.reason, /Math\.round.*stable ties.*confidence ignored/);
+	}
+});
+
+for (const score of [NaN, Infinity, -Infinity]) {
+	test(`classification log preserves nonfinite score ${score} for debugging`, async () => {
+		const h = harness({ classification: classification(score) });
+		await h.run();
+		assert.equal(h.logs()[0].response.answers.difficulty.score, String(score));
+		assert.equal(h.logs()[0].decision.outcome, "fallback");
+	});
+}
+
+for (const logFailure of ["mkdir", "append"]) {
+	test(`log ${logFailure} failure does not block selection or launch`, async () => {
+		const h = harness({ logFailure });
+		await h.run();
+		assert.equal(h.calls.exec.length, 5);
+		assert.equal(h.calls.exec[1].args.at(-1), "anthropic/claude-opus-5-5");
+		assert.equal(h.notifications.length, 2);
+		assert.ok(h.notifications.every(({ level }) => level === "info"));
+		assert.equal(h.logErrors.length, 1);
+		assert.match(h.logErrors[0], /Handoff classification log write failed: .*permission denied|Handoff classification log write failed: .*disk full/);
 	});
 }
 
@@ -703,6 +809,7 @@ for (const [label, options, args, pattern] of [
 		const h = harness(options);
 		await h.run(args);
 		assert.equal(h.calls.complete.length, 0);
+		assert.deepEqual(h.logWrites, []);
 		assert.equal(h.calls.getModelOfType.length, 0);
 		assert.equal(h.calls.classify.length, 0);
 		assert.equal(h.calls.editor.length, 0);

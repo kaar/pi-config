@@ -46,6 +46,30 @@ The generation request sends the conversation context and handoff goal to OpenRo
 
 The command does not truncate the generated prompt to fit a classifier limit. A context-limit error uses the source-model fallback and preserves the prompt.
 
+## Classification debug log
+
+The extension appends selection records to `~/.pi/agent/logs/handoff-classifications.jsonl`, separate from the session transcript. The path follows `PI_CODING_AGENT_DIR` when set.
+
+Each JSONL line contains:
+
+- A timestamp, duration, source session ID and file, working directory, and source model.
+- The exact classification request, including the generated prompt and difficulty rubric.
+- The full classifier response, including the score, confidence, usage, and provider error message when available. Thrown errors appear in `error`.
+- Candidate model IDs and output prices in scope order and sorted rank order.
+- The selection outcome, chosen model, clamped score, zero-based rank, and mapping rule, or the fallback reason.
+
+Jev returns a score, not a written explanation. The logged rubric, answer, and rank mapping show the evidence for the model choice. The logged selection describes the intended successor model, not successful pane creation.
+
+Skipped classification records have a null request and response. Cancelled requests produce a record when the request settles, including any late response, without another notification or pane. Generation failures and cancellations before selection produce no classification record.
+
+The file contains full prompts and can contain sensitive project information. The logger does not add credentials, headers, or environment variables. New log files use owner-only permissions (`0600`). This repository ignores the log file. The file grows until you delete or archive it manually. Log write failures go to stderr and do not block the handoff.
+
+After `/reload`, new handoffs create records. To read the latest record:
+
+```bash
+tail -n 1 "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/logs/handoff-classifications.jsonl" | jq .
+```
+
 ## External editor
 
 Pi selects the editor from `externalEditor`, then `$VISUAL`, then `$EDITOR`, then its platform default. Pi owns the editor process, temporary file, and return to the draft. GUI editors need their normal wait configuration, such as `--wait`.

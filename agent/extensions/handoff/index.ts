@@ -7,7 +7,8 @@
  * Generates a continuation prompt with DeepSeek V4.1 Flash through OpenRouter
  * Nitro, with reasoning disabled. Pastes the prompt into a fresh Pi session,
  * focuses its right-hand Herdr pane, and sends Pi's external-editor shortcut.
- * The new session uses the captured source model. Saving and closing the editor
+ * Jev rates the generated prompt; output-price rank selects the successor model.
+ * Selection failures use the captured source model. Saving and closing the editor
  * returns to an unsubmitted draft. The source session is not changed.
  */
 
@@ -17,8 +18,14 @@ import { BorderedLoader, convertToLlm, serializeConversation } from "@earendil-w
 
 type AgentMessage = Parameters<typeof convertToLlm>[0][number];
 type Model = NonNullable<ExtensionCommandContext["model"]>;
-type Generation =
-	| { status: "ok"; text: string; externalEditorKey: string | undefined }
+type Preparation =
+	| {
+		status: "ok";
+		text: string;
+		externalEditorKey: string | undefined;
+		modelRef: string;
+		notification: { text: string; level: "info" | "warning" };
+	}
 	| { status: "cancelled" }
 	| { status: "error"; message: string };
 
@@ -102,22 +109,30 @@ function errorText(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-function generatePrompt(
+function prepareHandoff(
 	ctx: ExtensionCommandContext,
 	model: Model,
 	conversationText: string,
 	goal: string,
-): Promise<Generation> {
-	return ctx.ui.custom<Generation>((tui, theme, keybindings, done) => {
+	sourceModelRef: string,
+	scopedModels: ExtensionCommandContext["scopedModels"],
+): Promise<Preparation> {
+	return ctx.ui.custom<Preparation>((tui, theme, keybindings, done) => {
 		const externalEditorKey = keybindings.getKeys("app.editor.external")[0];
 		let finished = false;
-		const finish = (result: Generation) => {
+		const finish = (result: Preparation) => {
 			if (finished) return;
 			finished = true;
 			done(result);
 		};
-		const loader = new BorderedLoader(tui, theme, "Generating handoff with DeepSeek V4.1 Flash (Nitro)...");
+		const loader = new BorderedLoader(tui, theme, "Generating handoff and selecting successor model...");
 		loader.onAbort = () => finish({ status: "cancelled" });
+		const cancelled = () => {
+			if (finished) return true;
+			if (!loader.signal.aborted) return false;
+			finish({ status: "cancelled" });
+			return true;
+		};
 
 		const userMessage: Message = {
 			role: "user",
@@ -143,7 +158,8 @@ function generatePrompt(
 					}),
 				},
 			)
-			.then((response) => {
+			.then(async (response) => {
+				if (cancelled()) return;
 				if (response.stopReason === "aborted") return finish({ status: "cancelled" });
 				if (response.stopReason === "error") {
 					return finish({ status: "error", message: response.errorMessage || "model request failed" });
@@ -153,9 +169,60 @@ function generatePrompt(
 					.map((block) => block.text)
 					.join("\n")
 					.trim();
-				finish(text ? { status: "ok", text, externalEditorKey } : { status: "error", message: "model returned an empty prompt" });
+				if (!text) return finish({ status: "error", message: "model returned an empty prompt" });
+
+				const fallback = (reason: string) => finish({
+					status: "ok", text, externalEditorKey, modelRef: sourceModelRef,
+					notification: {
+						text: `Handoff: Jev selection unavailable (${reason}). Using source model ${sourceModelRef}.`,
+						level: "warning",
+					},
+				});
+				if (scopedModels.length === 0) return fallback("no scoped models");
+				// A finite probe score validates prices before any classifier work.
+				if (!selectModelByPriceRank(scopedModels, 0)) return fallback("invalid output prices");
+				try {
+					const jev = ctx.modelRegistry.getModelOfType("classifier", "typesafe", "jev-latest");
+					if (cancelled()) return;
+					if (!jev) return fallback("Jev not in catalog");
+					const result = await ctx.modelRegistry.classify(jev, {
+						state: { prompt: text },
+						questions: {
+							difficulty: {
+								type: "score",
+								instructions: "Rate the difficulty of the next task requested in this handoff prompt. Use the context to understand the task. Rate the work that remains, not completed work or prompt length. Do not choose a model.",
+								criteria: [
+									"Trivial: A mechanical, localized change or simple factual response. The required action is explicit and needs almost no investigation or judgment.",
+									"Routine: A familiar, bounded task with clear requirements. It needs ordinary implementation, documentation, or configuration work and straightforward verification.",
+									"Hard: Substantial reasoning, investigation, or review. It involves several interacting parts, ambiguous requirements, non-obvious bugs, or meaningful design trade-offs.",
+									"Very hard: Deep reasoning about subtle failures or architecture. It involves difficult concurrency, cross-cutting constraints, or substantial uncertainty with no straightforward solution.",
+								],
+							},
+						},
+					}, { signal: loader.signal });
+					if (cancelled()) return;
+					if (result?.stopReason === "aborted") return finish({ status: "cancelled" });
+					if (result?.stopReason !== "stop") return fallback("classification failed");
+					const answer = result.answers?.difficulty;
+					if (answer?.type !== "score" || !Number.isFinite(answer.score)) return fallback("invalid difficulty score");
+					const score = Math.max(0, Math.min(3, answer.score));
+					const selected = selectModelByPriceRank(scopedModels, score);
+					if (!selected) return fallback("invalid output prices");
+					const modelRef = `${selected.provider}/${selected.id}`;
+					finish({
+						status: "ok", text, externalEditorKey, modelRef,
+						notification: {
+							text: `Handoff: Jev difficulty ${score.toFixed(2)}/3 -> ${modelRef}. Override with /model in the new session before submitting.`,
+							level: "info",
+						},
+					});
+				} catch {
+					if (!cancelled()) fallback("classification failed");
+				}
 			})
-			.catch((error) => finish({ status: "error", message: errorText(error) }));
+			.catch((error) => {
+				if (!cancelled()) finish({ status: "error", message: errorText(error) });
+			});
 
 		return loader;
 	});
@@ -257,13 +324,14 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			await ctx.waitForIdle();
-			// Capture the selection once so later model switches in this session do not affect the handoff.
+			// Capture the fallback and scope once, after the source settles.
 			const model = ctx.model;
 			if (!model) {
 				ctx.ui.notify("No model selected", "error");
 				return;
 			}
-			const modelRef = `${model.provider}/${model.id}`;
+			const sourceModelRef = `${model.provider}/${model.id}`;
+			const scopedModels = [...ctx.scopedModels];
 			const messages = getHandoffMessages(ctx.sessionManager.getBranch());
 			if (messages.length === 0) {
 				ctx.ui.notify("No conversation to hand off", "error");
@@ -280,17 +348,18 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			const generator = { ...baseGenerator, id: `${baseGenerator.id}:nitro` };
-			const generation = await generatePrompt(ctx, generator, conversationText, goal);
-			if (generation.status === "cancelled") {
+			const preparation = await prepareHandoff(ctx, generator, conversationText, goal, sourceModelRef, scopedModels);
+			if (preparation.status === "cancelled") {
 				ctx.ui.notify("Handoff cancelled", "info");
 				return;
 			}
-			if (generation.status === "error") {
-				ctx.ui.notify(`Handoff prompt generation failed: ${generation.message}`, "error");
+			if (preparation.status === "error") {
+				ctx.ui.notify(`Handoff prompt generation failed: ${preparation.message}`, "error");
 				return;
 			}
 
-			await launchSuccessor(pi, ctx, modelRef, generation.text, generation.externalEditorKey);
+			ctx.ui.notify(preparation.notification.text, preparation.notification.level);
+			await launchSuccessor(pi, ctx, preparation.modelRef, preparation.text, preparation.externalEditorKey);
 		},
 	});
 }

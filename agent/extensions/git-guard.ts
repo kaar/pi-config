@@ -10,7 +10,8 @@
  *
  * Bash guarding:
  *  - Blocks interactive git commands that would hang waiting for an editor.
- *  - Blocks destructive git commands (reset --hard, clean -f, checkout ., etc.).
+ *  - Blocks destructive git commands (reset --hard, clean -f, checkout ., branch -f, etc.).
+ *  - Prompts when a command overwrites a tracked file via `git show ... >` or `cp`.
  */
 
 import type { ExtensionAPI, ExtensionContext, BashToolCallEvent } from "@earendil-works/pi-coding-agent";
@@ -24,7 +25,7 @@ const COMMIT_PATTERN = /git\s+commit/;
 
 const INTERACTIVE_GIT_PATTERNS: RegExp[] = [
   /git\s+merge(?!.*(--no-edit|-m|-F|--file))/,
-  /git\s+rebase\s+--continue(?!.*(GIT_EDITOR|core\.editor))/,
+  /^(?![\s\S]*(?:GIT_EDITOR|core\.editor))[\s\S]*git\s+rebase\s+--continue/,
   /git\s+tag\s+(-a|--annotate|-s|--sign)(?!.*(-m|--message|-F|--file))/,
 ];
 
@@ -35,6 +36,8 @@ const DESTRUCTIVE_GIT_PATTERNS: RegExp[] = [
   // Allows: list, show, create (read-only)
   /git\s+stash(?!\s+(list|show|create))(?:\s|$)/,
   /git\s+rm\s+(?:-[a-zA-Z]*f[a-zA-Z]*|--force)/,
+  // Force-moving a branch ref can orphan commits (recoverable only via reflog)
+  /git\s+branch\b[^;&|\n]*\s(?:-f|--force)(?=[\s;&|]|$)/,
 ];
 
 const GIT_TIMEOUT = 5000;
@@ -46,6 +49,24 @@ function nearestExistingDir(dir: string): string {
     dir = parent;
   }
   return dir;
+}
+
+function overwriteTargets(command: string): string[] {
+  return command.split(/&&|\|\||[;|\n]/).flatMap((segment) => {
+    const gitShow = segment.match(/git\s+show\b[^>]*?(?<![0-9&>])>(?![>&])\s*(\S+)/);
+    const cp = segment.match(/(?:^|\s)cp\s+(.+)/);
+    const target = gitShow?.[1] ?? (() => {
+      if (!cp) return undefined;
+      const args = cp[1].split(/\s+/).filter((arg) => !arg.startsWith("-"));
+      return args.length >= 2 ? args.at(-1) : undefined;
+    })();
+
+    if (!target) return [];
+    const unquoted = (target.startsWith('"') && target.endsWith('"')) || (target.startsWith("'") && target.endsWith("'"))
+      ? target.slice(1, -1)
+      : target;
+    return /[$`*?]/.test(unquoted) ? [] : [unquoted];
+  });
 }
 
 function parseCommitMessage(command: string): string | null {
@@ -199,6 +220,24 @@ export default function(pi: ExtensionAPI) {
     return promptOrBlock(`"${filePath}" is not tracked by git`, toolName, ctx);
   }
 
+  async function gateOverwrite(
+    command: string,
+    ctx: ExtensionContext,
+  ): Promise<{ block: true; reason: string } | undefined> {
+    const targets = overwriteTargets(command);
+    const trackedTargets: string[] = [];
+
+    for (const target of targets) {
+      const abs = resolve(ctx.cwd, target);
+      if (!existsSync(abs)) continue;
+      const realAbs = realpathSync(abs);
+      if (await isGitTracked(realAbs, ctx.cwd)) trackedTargets.push(target);
+    }
+
+    if (trackedTargets.length === 0) return undefined;
+    return promptOrBlock(`command overwrites tracked file(s): ${trackedTargets.join(", ")}`, "bash", ctx);
+  }
+
   async function promptCommitOrBlock(
     event: BashToolCallEvent,
     ctx: ExtensionContext,
@@ -284,6 +323,8 @@ export default function(pi: ExtensionAPI) {
       if (DESTRUCTIVE_GIT_PATTERNS.some((p) => p.test(command))) {
         return { block: true, reason: "Blocked: destructive git command" };
       }
+      const overwrite = await gateOverwrite(command, ctx);
+      if (overwrite) return overwrite;
       if (COMMIT_PATTERN.test(command)) {
         return promptCommitOrBlock(event as BashToolCallEvent, ctx);
       }

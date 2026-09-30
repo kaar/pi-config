@@ -85,6 +85,7 @@ Reusable, invokable capabilities. See [docs/skills.md](docs/skills.md).
 - [skills.md](docs/skills.md) - Skills authoring guide
 - [prompt-templates.md](docs/prompt-templates.md) - Prompt template syntax
 - [session.md](docs/session.md) - Session management
+- [codemode-and-jev.md](docs/codemode-and-jev.md) - Codemode tool and Jev classifier model
 
 ## Troubleshooting
 

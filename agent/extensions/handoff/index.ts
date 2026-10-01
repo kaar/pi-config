@@ -15,7 +15,7 @@
 import { type TextContent, uuidv7 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader, convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
-import { createHerdr, type Herdr } from "./herdr";
+import { createHerdr } from "./herdr";
 
 const SYSTEM_PROMPT = `You are a context transfer assistant. Given a conversation history and the user's goal for a new thread, write a focused prompt that starts a fresh coding agent session.
 
@@ -95,25 +95,6 @@ async function createHandoffPrompt(
 	return prompt;
 }
 
-async function launchSuccessor(
-	herdr: Herdr,
-	cwd: string,
-	modelRef: string,
-	prompt: string
-): Promise<string> {
-	const paneId = await herdr.splitPane("right", cwd);
-	try {
-		await herdr.startPiAgent(paneId, `handoff-${Date.now().toString(36)}`, modelRef);
-		await herdr.sendText(paneId, prompt);
-		// TODO: Could be replace by removing --no-focus?
-		await herdr.focusAgent(paneId);
-		await herdr.sendKeys(paneId, "ctrl+g");
-	} catch (error) {
-		throw new Error(`pane ${paneId}: ${errorText(error)}`, { cause: error });
-	}
-	return paneId;
-}
-
 /** Run a task behind a cancellable loader. Resolves undefined on cancel. */
 async function withLoader<T>(
 	ctx: ExtensionCommandContext,
@@ -163,17 +144,25 @@ export default function(pi: ExtensionAPI) {
 			}
 
 			const modelRef = `${model.provider}/${model.id}`;
+			let paneId: string | undefined;
 			try {
 				const handoffPrompt = await withLoader(ctx, "Generating handoff prompt...", (signal) =>
 					createHandoffPrompt(ctx, goal, signal));
 				if (!handoffPrompt) return;
-				const paneId = await launchSuccessor(createHerdr(pi), ctx.cwd, modelRef, handoffPrompt);
+				const herdr = createHerdr(pi);
+				paneId = await herdr.splitPane("right", ctx.cwd);
+				await herdr.startPiAgent(paneId, `handoff-${Date.now().toString(36)}`, modelRef);
+				await herdr.sendText(paneId, handoffPrompt);
+				// TODO: Could be replace by removing --no-focus?
+				await herdr.focusAgent(paneId);
+				await herdr.sendKeys(paneId, "ctrl+g");
 				ctx.ui.notify(
 					`Handoff draft sent to pane ${paneId}. Save and close the editor, then press Enter in Pi.`,
 					"info",
 				);
 			} catch (error) {
-				ctx.ui.notify(`Handoff failed: ${errorText(error)}`, "error");
+				const context = paneId ? `pane ${paneId}: ` : "";
+				ctx.ui.notify(`Handoff failed: ${context}${errorText(error)}`, "error");
 			}
 		},
 	});

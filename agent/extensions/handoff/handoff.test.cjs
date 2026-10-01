@@ -1,902 +1,496 @@
-// Run with: node --test agent/extensions/handoff/handoff.test.cjs
+// Run from the repository root: node --test agent/extensions/handoff/handoff.test.cjs
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
-const { join } = require("node:path");
-const { test } = require("node:test");
-const { runInNewContext } = require("node:vm");
-const ts = require("../node_modules/typescript");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+const { before, describe, it, mock } = require("node:test");
+const ts = require("typescript");
 
-const source = readFileSync(join(__dirname, "index.ts"), "utf8");
-const compiled = ts.transpileModule(source, {
-	compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-}).outputText;
+// Exercise both production modules. Only Pi's UI, model requests, and process
+// execution are replaced. Unlisted imports fail rather than reaching the host.
+const modules = new Map(["index", "herdr"].map((name) => [name, ts.transpileModule(
+	fs.readFileSync(path.join(__dirname, `${name}.ts`), "utf8"),
+	{ compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
+).outputText]));
+let piRuntime;
+before(async () => { piRuntime = await import("@earendil-works/pi-coding-agent"); });
 
-const NOW = 1790000000000;
-const MODEL = { provider: "test-provider", id: "test-model" };
-const OTHER_MODEL = { provider: "other-provider", id: "org/other-model:free" };
-const GENERATOR = Object.freeze({
-	provider: "openrouter",
-	id: "deepseek/deepseek-v4.1-flash",
-	api: "openai-completions",
-	baseUrl: "https://openrouter.ai/api/v1",
-	reasoning: true,
-	contextWindow: 1048576,
-	maxTokens: 65536,
-	compat: Object.freeze({ thinkingFormat: "openrouter" }),
-});
-const JEV = Object.freeze({ type: "classifier", provider: "typesafe", id: "jev-latest" });
-const classification = (score = 2.25, confidence = 0.9) => ({
-	stopReason: "stop", answers: { difficulty: { type: "score", score, confidence } },
-});
-const HERDR_ENV = { HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_BIN_PATH: "/bin/herdr" };
-const SPLIT_OK = { code: 0, stdout: JSON.stringify({ result: { pane: { pane_id: "w1:p2" } } }), stderr: "" };
+const cwd = "/projects/a directory; $(not-a-command)";
+const destination = "workspace:successor";
+const generator = Object.freeze({ provider: "openrouter", id: "deepseek/deepseek-v4.1-flash" });
+const sourceModel = Object.freeze({ provider: "source", id: "org/model:variant" });
+const environment = { HERDR_ENV: "1", HERDR_PANE_ID: "workspace:source", HERDR_BIN_PATH: "/custom bin/herdr" };
+const success = (stdout = "") => ({ code: 0, stdout, stderr: "" });
+const splitResult = () => success(JSON.stringify({ result: { pane: { pane_id: destination } } }));
+const answer = (text = "Continue the implementation.") => ({ stopReason: "stop", content: [{ type: "text", text }] });
+const userMessage = (text) => ({ role: "user", content: [{ type: "text", text }], timestamp: 1 });
+const settle = () => new Promise(setImmediate);
 
-const message = (id, role, text) => ({
-	type: "message",
-	id,
-	message: { role, content: [{ type: "text", text }], timestamp: 1 },
-});
-const BRANCH = [message("m1", "user", "start the feature"), message("m2", "assistant", "planned it")];
+function loadModules(env, dependencies = {}) {
+	const cache = new Map();
+	function load(name) {
+		if (cache.has(name)) return cache.get(name);
+		const exports = {};
+		cache.set(name, exports);
+		vm.runInNewContext(modules.get(name), {
+			exports,
+			process: { env },
+			Error,
+			require(specifier) {
+				if (specifier === "./herdr") return load("herdr");
+				assert.ok(Object.hasOwn(dependencies, specifier), `Unexpected import: ${specifier}`);
+				return dependencies[specifier];
+			},
+		}, { filename: path.join(__dirname, `${name}.ts`) });
+		return exports;
+	}
+	return load;
+}
 
-function harness(options = {}) {
-	const calls = { find: [], complete: [], getModelOfType: [], classify: [], getKeys: [], loaderLabels: [], exec: [], editor: [], setEditorText: [], newSession: 0, sendUserMessage: 0, setModel: 0 };
-	const notifications = [];
+function setup(options = {}) {
 	const events = [];
-	const logWrites = [];
-	const logDirectories = [];
-	const logErrors = [];
+	const notifications = [];
+	const drafts = [];
+	const loaders = [];
 	const commands = new Map();
-	let loader;
-	const ok = { code: 0, stdout: "", stderr: "" };
-	const exec = { split: SPLIT_OK, start: ok, send: ok, focus: ok, keys: ok, ...options.exec };
-	const externalKeys = options.externalKeys ?? ["ctrl+g"];
+	const session = options.session ?? piRuntime.SessionManager.inMemory(cwd);
+	if (!options.session) session.appendMessage(userMessage("The parser needs validation."));
+	let editorText = "Existing source draft";
 
-	class BorderedLoader {
+	class TestLoader {
 		constructor(_tui, _theme, label) {
-			calls.loaderLabels.push(label);
+			this.label = label;
 			this.controller = new AbortController();
-			loader = this;
+			loaders.push(this);
 		}
-		get signal() {
-			return this.controller.signal;
-		}
-		set onAbort(fn) {
-			this.abort = () => {
-				this.controller.abort();
-				fn();
-			};
+		get signal() { return this.controller.signal; }
+		cancel() {
+			this.controller.abort();
+			this.onAbort();
 		}
 	}
 
 	const api = {
-		registerCommand: (name, command) => commands.set(name, command),
-		sendUserMessage: () => calls.sendUserMessage++,
-		setModel: () => calls.setModel++,
-		async exec(command, args) {
-			events.push(`exec:${args[1]}`);
-			calls.exec.push({ command, args: Array.from(args) });
-			const key = { split: "split", start: "start", "send-text": "send", focus: "focus", "send-keys": "keys" }[args[1]];
-			await options.onExec?.(key);
-			return exec[key];
-		},
+		registerCommand: (name, definition) => commands.set(name, definition),
+		exec: mock.fn(async (binary, args) => {
+			events.push(args[1]);
+			if (options.exec) return options.exec(binary, args);
+			return args[1] === "split" ? splitResult() : success();
+		}),
 	};
 	const ctx = {
-		mode: options.mode ?? "tui",
-		model: "model" in options ? options.model : MODEL,
-		scopedModels: options.scopedModels ?? ELEVEN_MODELS,
-		cwd: "/work/project",
-		waitForIdle: async () => options.onIdle?.(),
-		newSession: async () => calls.newSession++,
+		mode: "tui",
+		cwd,
+		model: sourceModel,
+		waitForIdle: mock.fn(async () => { events.push("idle"); await options.idle?.(); }),
 		sessionManager: {
-			getBranch: () => options.branch ?? BRANCH,
-			getSessionId: () => "source-session-id",
-			getSessionFile: () => "/test/sessions/source.jsonl",
+			buildSessionProjection: mock.fn(() => {
+				events.push("projection");
+				return session.buildSessionProjection();
+			}),
 		},
 		modelRegistry: {
-			find(provider, id) {
-				calls.find.push({ provider, id });
-				return "generator" in options ? options.generator : GENERATOR;
-			},
-			complete(model, context, requestOptions) {
-				calls.complete.push({ model, context, requestOptions });
+			find: mock.fn(() => generator),
+			complete: mock.fn(async (...args) => {
 				events.push("generate");
-				const response = options.onComplete ? options.onComplete(() => loader)
-					: Promise.resolve(options.response ?? { stopReason: "stop", content: [{ type: "text", text: "  Generated prompt  " }] });
-				return response.then((result) => { events.push("generated"); return result; });
-			},
-			getModelOfType(type, provider, id) {
-				calls.getModelOfType.push({ type, provider, id });
-				events.push("lookup");
-				if (options.onLookup) return options.onLookup(() => loader);
-				return "jev" in options ? options.jev : JEV;
-			},
-			classify(model, context, requestOptions) {
-				calls.classify.push({ model, context, requestOptions });
-				events.push("classify");
-				const response = options.onClassify ? options.onClassify(() => loader)
-					: Promise.resolve("classification" in options ? options.classification : classification());
-				return response.then((result) => { events.push("classified"); return result; });
-			},
+				return options.complete ? options.complete(...args) : answer();
+			}),
 		},
 		ui: {
-			notify: (text, level) => { events.push(`notify:${level}`); notifications.push({ text, level }); },
-			custom: (factory) => new Promise((resolve) => factory({}, {}, {
-				getKeys: (action) => {
-					calls.getKeys.push(action);
-					return externalKeys;
-				},
-			}, (result) => { events.push("loader-done"); resolve(result); })),
-			editor: async (title, prefill) => {
-				calls.editor.push({ title, prefill });
-				throw new Error("Source review must not open");
-			},
-			setEditorText: (text) => calls.setEditorText.push(text),
+			notify: (text, level) => notifications.push({ text, level }),
+			setEditorText: (text) => { drafts.push(text); editorText = text; },
+			// Model completion and Escape can both call done. Pi accepts only the
+			// first result. Terminal mounting and loader disposal are not simulated.
+			custom: mock.fn((factory) => new Promise((resolve) => {
+				let closed = false;
+				factory({}, {}, {
+					getKeys: () => assert.fail("Handoff must not inspect editor keybindings"),
+				}, (value) => {
+					if (closed) return;
+					closed = true;
+					events.push("loader closed");
+					resolve(value);
+				});
+			})),
 		},
 	};
-
-	const exports = {};
-	runInNewContext(`${compiled}\nexports.selectModelByPriceRank = selectModelByPriceRank;`, {
-		exports,
-		console: { error: (message) => logErrors.push(message) },
-		process: { env: options.env ?? HERDR_ENV },
-		Date: class extends Date {
-			static now() {
-				return NOW;
-			}
-		},
-		require(name) {
-			if (name === "node:path") return { join };
-			if (name === "node:fs") return {
-				mkdirSync(path, settings) {
-					if (options.logFailure === "mkdir") throw new Error("permission denied");
-					logDirectories.push({ path, settings: { ...settings } });
-				},
-				appendFileSync(path, data, settings) {
-					if (options.logFailure === "append") throw new Error("disk full");
-					logWrites.push({ path, data, settings: { ...settings } });
-				},
-			};
-			if (name === "@earendil-works/pi-ai") return { uuidv7: () => "session-id" };
-			assert.equal(name, "@earendil-works/pi-coding-agent");
-			return {
-				BorderedLoader,
-				getAgentDir: () => options.agentDir ?? "/test/agent",
-				convertToLlm: (messages) => messages,
-				serializeConversation: (messages) => JSON.stringify(messages),
-			};
+	const load = loadModules(options.env ?? { ...environment }, {
+		"@earendil-works/pi-ai": { uuidv7: () => "isolated-generation-session" },
+		"@earendil-works/pi-coding-agent": {
+			BorderedLoader: TestLoader,
+			convertToLlm: piRuntime.convertToLlm,
+			serializeConversation: piRuntime.serializeConversation,
 		},
 	});
-	exports.default(api);
-	const run = async (args = "implement phase one") => {
-		await commands.get("handoff").handler(args, ctx);
-		assert.deepEqual(calls.editor, []);
-		assert.equal(calls.newSession, 0);
-		assert.equal(calls.sendUserMessage, 0);
-		assert.equal(calls.setModel, 0);
-		for (const { args } of calls.exec) {
-			assert.ok(!args.includes("--thinking"), "must not select a thinking level");
-			assert.ok(!["prompt", "run"].includes(args[1]), "must not submit a prompt");
-			if (args[1] === "send-keys") {
-				assert.deepEqual(args, ["agent", "send-keys", "w1:p2", externalKeys[0]]);
-				assert.ok(!args.slice(3).some((key) => /^(enter|return)$/i.test(key)));
-			}
-		}
-	};
+	load("index").default(api);
 	return {
-		calls, ctx, notifications, events, run, getLoader: () => loader, selectModelByPriceRank: exports.selectModelByPriceRank,
-		logWrites, logDirectories, logErrors, logs: () => logWrites.map(({ data }) => JSON.parse(data)),
+		api, ctx, session, events, notifications, drafts, loaders, commands,
+		run: (goal = "Finish validation") => commands.get("handoff").handler(goal, ctx),
+		executions: () => api.exec.mock.calls.map(({ arguments: [binary, args] }) => ({ binary, args: Array.from(args) })),
+		editorText: () => editorText,
 	};
 }
 
-function scopedModel(provider, id, output, thinkingLevel) {
-	return Object.freeze({
-		model: Object.freeze({ provider, id, cost: Object.freeze({ input: 1, output, cacheRead: 1, cacheWrite: 1 }) }),
-		thinkingLevel,
-	});
+function assertSourceUntouched(h) {
+	assert.deepEqual(h.drafts, []);
+	assert.equal(h.editorText(), "Existing source draft");
 }
 
-for (const [label, prices, score, expectedIndex] of [
-	["empty scope", [], 1.5, undefined],
-	["single model at minimum", [7], 0, 0],
-	["single model at midpoint", [7], 1.5, 0],
-	["single model at maximum", [7], 3, 0],
-	["unsorted minimum", [20, 1, 5], 0, 1],
-	["unsorted midpoint", [20, 1, 5], 1.5, 2],
-	["unsorted maximum", [20, 1, 5], 3, 0],
-	["rank rather than dollar interpolation", [1, 2, 1000], 1.5, 1],
-	["equal prices first", [7, 7, 7], 0, 0],
-	["equal prices middle", [7, 7, 7], 1.5, 1],
-	["equal prices last", [7, 7, 7], 3, 2],
-	["zero price", [5, 0, 2], 0, 1],
-	["all zero prices", [0, 0, 0], 1.5, 1],
-	["clamp below zero", [20, 1, 5], -100, 1],
-	["clamp above three", [20, 1, 5], 100, 0],
-	["two-model midpoint rounds up", [1, 5], 1.5, 1],
-	["NaN score", [1, 5], NaN, undefined],
-	["positive infinite score", [1, 5], Infinity, undefined],
-	["negative infinite score", [1, 5], -Infinity, undefined],
-	["single model still rejects nonfinite score", [1], NaN, undefined],
-	["numeric string score", [1, 5], "1.5", undefined],
-	["missing score", [1, 5], undefined, undefined],
-]) {
-	test(`price rank: ${label}`, () => {
-		const scope = Object.freeze(prices.map((price, i) => scopedModel("test", `model-${i}`, price)));
-		const before = structuredClone(scope);
-		assert.equal(harness().selectModelByPriceRank(scope, score), scope[expectedIndex]?.model);
-		assert.deepEqual(scope, before);
-	});
+function assertError(h, pattern) {
+	assert.equal(h.notifications.length, 1);
+	assert.equal(h.notifications[0].level, "error");
+	assert.match(h.notifications[0].text, pattern);
 }
 
-for (const [label, cost] of [
-	["missing cost", undefined],
-	["null cost", null],
-	["missing output", {}],
-	["undefined output", { output: undefined }],
-	["null output", { output: null }],
-	["string output", { output: "5" }],
-	["boolean output", { output: false }],
-	["negative output", { output: -1 }],
-	["NaN output", { output: NaN }],
-	["positive infinite output", { output: Infinity }],
-	["negative infinite output", { output: -Infinity }],
-]) {
-	test(`price rank rejects the entire scope: ${label}`, () => {
-		const invalid = Object.freeze({ model: Object.freeze({ provider: "test", id: "invalid", cost: Object.freeze(cost) }) });
-		const valid = scopedModel("test", "valid", 0);
-		const select = harness().selectModelByPriceRank;
-		for (const entries of [[invalid], [valid, invalid], [invalid, valid]]) {
-			const scope = Object.freeze(entries);
-			for (const score of [0, 1.5, 3]) assert.equal(select(scope, score), undefined);
-		}
+describe("handoff command", { timeout: 5000 }, () => {
+	it("registers only /handoff", () => {
+		const h = setup();
+		assert.deepEqual([...h.commands.keys()], ["handoff"]);
+		assert.match(h.commands.get("handoff").description, /fresh Pi session/);
 	});
-}
 
-// Fixed snapshot in configured scope order, not a lookup of live settings or catalog prices.
-const ELEVEN_MODELS = Object.freeze([
-	["openai-codex", "gpt-5.6-terra", 12],
-	["openrouter", "deepseek/deepseek-v4.1-flash", 0.396],
-	["openai-codex", "gpt-6-astra", 50],
-	["anthropic", "claude-fable-5-1", 50],
-	["github-copilot", "gpt-5.6-terra", 12],
-	["github-copilot", "claude-sonnet-5", 10],
-	["github-copilot", "gemini-3.5-flash", 9],
-	["github-copilot", "claude-haiku-4.5", 5],
-	["openrouter", "deepseek/deepseek-v4-pro-0813", 1.98],
-	["openai-codex", "gpt-5.6-sol", 20],
-	["anthropic", "claude-opus-5-5", 20],
-].map(([provider, id, price]) => scopedModel(provider, id, price)));
-const PRICE_RANKS = [1, 8, 7, 6, 5, 0, 4, 9, 10, 2, 3];
+	it("generates from the projected session and transfers an unsubmitted draft in order", async () => {
+		const h = setup();
+		const originalEntries = structuredClone(h.session.getEntries());
+		await h.run("  Finish validation  \n");
 
-for (const [rank, scopeIndex] of PRICE_RANKS.entries()) {
-	test(`price rank: 11-model fixture rank ${rank}`, () => {
-		const before = structuredClone(ELEVEN_MODELS);
-		assert.equal(harness().selectModelByPriceRank(ELEVEN_MODELS, rank * 0.3), ELEVEN_MODELS[scopeIndex].model);
-		assert.deepEqual(ELEVEN_MODELS, before);
+		assert.deepEqual(h.events, ["idle", "projection", "generate", "loader closed", "split", "start", "send-text", "focus", "send-keys"]);
+		assert.equal(h.ctx.waitForIdle.mock.callCount(), 1);
+		assert.equal(h.ctx.sessionManager.buildSessionProjection.mock.callCount(), 1);
+		assert.equal(h.ctx.modelRegistry.find.mock.callCount(), 1);
+		assert.deepEqual(Array.from(h.ctx.modelRegistry.find.mock.calls[0].arguments), ["openrouter", "deepseek/deepseek-v4.1-flash"]);
+		assert.equal(h.ctx.modelRegistry.complete.mock.callCount(), 1);
+		const [model, request, settings] = h.ctx.modelRegistry.complete.mock.calls[0].arguments;
+		assert.equal(model, generator);
+		assert.match(request.systemPrompt, /Output only the prompt itself/);
+		assert.equal(request.messages.length, 1);
+		assert.equal(request.messages[0].role, "user");
+		assert.equal(request.messages[0].content[0].text,
+			"## Conversation History\n\n[User]: The parser needs validation.\n\n## User's Goal for New Thread\n\nFinish validation");
+		assert.equal(typeof request.messages[0].timestamp, "number");
+		assert.equal(settings.cacheRetention, "none");
+		assert.equal(settings.sessionId, "isolated-generation-session");
+		assert.equal(settings.signal, h.loaders[0].signal);
+		assert.equal(settings.signal.aborted, false);
+		assert.deepEqual(h.loaders.map(({ label }) => label), ["Generating handoff prompt..."]);
+
+		const calls = h.executions();
+		const agentName = calls[1].args[2];
+		assert.match(agentName, /^handoff-[a-z0-9]+$/);
+		assert.ok(agentName.length <= 32);
+		assert.deepEqual(calls, [
+			{ binary: environment.HERDR_BIN_PATH, args: ["pane", "split", "--current", "--direction", "right", "--cwd", cwd, "--no-focus"] },
+			{ binary: environment.HERDR_BIN_PATH, args: ["agent", "start", agentName, "--kind", "pi", "--pane", destination, "--", "--model", "source/org/model:variant"] },
+			{ binary: environment.HERDR_BIN_PATH, args: ["pane", "send-text", destination, "Continue the implementation."] },
+			{ binary: environment.HERDR_BIN_PATH, args: ["agent", "focus", destination] },
+			{ binary: environment.HERDR_BIN_PATH, args: ["agent", "send-keys", destination, "ctrl+g"] },
+		]);
+		assert.deepEqual(h.notifications, [{
+			text: `Handoff draft sent to pane ${destination}. Save and close the editor, then press Enter in Pi.`,
+			level: "info",
+		}]);
+		assert.equal(h.ctx.model, sourceModel);
+		assert.deepEqual(h.session.getEntries(), originalEntries);
+		assertSourceUntouched(h);
 	});
-}
 
-for (const [score, rank] of [[0, 0], [0.46, 2], [1, 3], [1.02, 3], [1.64, 5], [1.79, 6], [2, 7], [2.25, 8], [3, 10]]) {
-	test(`price rank: spec example ${score}`, () => {
-		assert.equal(harness().selectModelByPriceRank(ELEVEN_MODELS, score), ELEVEN_MODELS[PRICE_RANKS[rank]].model);
+	it("waits for idle before capturing the model and history, then keeps that model", async () => {
+		const idle = Promise.withResolvers();
+		const replacement = { provider: "replacement", id: "org/new:free" };
+		const h = setup({ idle: () => idle.promise, complete: async () => {
+			h.ctx.model = { provider: "later", id: "not-the-successor" };
+			return answer();
+		} });
+		const running = h.run();
+		assert.equal(h.ctx.modelRegistry.complete.mock.callCount(), 0);
+		assert.equal(h.ctx.sessionManager.buildSessionProjection.mock.callCount(), 0);
+		assert.deepEqual(h.executions(), []);
+		h.ctx.model = replacement;
+		h.session.appendMessage(userMessage("Work completed while waiting."));
+		idle.resolve();
+		await running;
+		assert.equal(h.executions()[1].args.at(-1), "replacement/org/new:free");
+		assert.match(h.ctx.modelRegistry.complete.mock.calls[0].arguments[1].messages[0].content[0].text, /Work completed while waiting/);
 	});
-}
 
-// The specified JS formula falls just below the mathematical midpoint at 0.15 and 1.65.
-// Preserve its exact arithmetic, without adding an epsilon or rounding the score first.
-for (const [boundary, lowerRank, atRank] of [
-	[0.15, 0, 0], [0.45, 1, 2], [0.75, 2, 3], [1.05, 3, 4], [1.35, 4, 5],
-	[1.65, 5, 5], [1.95, 6, 7], [2.25, 7, 8], [2.55, 8, 9], [2.85, 9, 10],
-]) {
-	test(`price rank: before, at, and after boundary ${boundary}`, () => {
-		const select = harness().selectModelByPriceRank;
-		for (const [score, rank] of [[boundary - 1e-12, lowerRank], [boundary, atRank], [boundary + 1e-12, lowerRank + 1]]) {
-			assert.equal(select(ELEVEN_MODELS, score), ELEVEN_MODELS[PRICE_RANKS[rank]].model, `score ${score}`);
-		}
-	});
-}
-
-test("price rank ignores thinkingLevel", () => {
-	const select = harness().selectModelByPriceRank;
-	for (const level of [undefined, "off", "low", "medium", "high", "xhigh"]) {
-		const scope = Object.freeze(ELEVEN_MODELS.map((entry, i) => Object.freeze({
-			model: entry.model,
-			thinkingLevel: i % 2 ? level : "high",
-		})));
-		for (const [rank, scopeIndex] of PRICE_RANKS.entries()) {
-			assert.equal(select(scope, rank * 0.3), ELEVEN_MODELS[scopeIndex].model);
-		}
-	}
-});
-
-test("price rank uses only base output price", () => {
-	const scope = Object.freeze(ELEVEN_MODELS.map(({ model }, i) => Object.freeze({
-		model: Object.freeze({
-			...model,
-			cost: Object.freeze({
-				output: model.cost.output, input: NaN, cacheRead: -1, cacheWrite: Infinity,
-				tiers: Object.freeze([Object.freeze({ inputTokensAbove: 1000, output: 100 - i, input: 1, cacheRead: 1, cacheWrite: 1 })]),
-			}),
-		}),
-	})));
-	const select = harness().selectModelByPriceRank;
-	for (const [rank, scopeIndex] of PRICE_RANKS.entries()) {
-		assert.equal(select(scope, rank * 0.3), scope[scopeIndex].model);
-	}
-});
-
-function assertNoSideEffects(h) {
-	assert.equal(h.calls.exec.length, 0);
-	assert.equal(h.calls.setEditorText.length, 0);
-	assert.equal(h.calls.newSession, 0);
-	assert.equal(h.calls.sendUserMessage, 0);
-	assert.equal(h.calls.setModel, 0);
-}
-
-test("successful handoff generates, classifies, pastes, focuses, and sends only the external-editor shortcut", async () => {
-	const h = harness();
-	await h.run("  implement phase one  ");
-
-	assert.equal(h.calls.complete.length, 1);
-	const [{ model, context, requestOptions }] = h.calls.complete;
-	assert.deepEqual(h.calls.find, [{ provider: "openrouter", id: "deepseek/deepseek-v4.1-flash" }]);
-	assert.notEqual(model, GENERATOR);
-	assert.deepEqual({ ...model }, { ...GENERATOR, id: "deepseek/deepseek-v4.1-flash:nitro" });
-	assert.equal(GENERATOR.id, "deepseek/deepseek-v4.1-flash");
-	assert.deepEqual(GENERATOR.compat, { thinkingFormat: "openrouter" });
-	assert.equal(h.ctx.model, MODEL);
-	assert.deepEqual(h.ctx.sessionManager.getBranch(), BRANCH);
-	assert.equal(h.ctx.scopedModels, ELEVEN_MODELS);
-	assert.deepEqual(h.calls.loaderLabels, ["Generating handoff and selecting successor model..."]);
-	assert.match(context.systemPrompt, /Output only the prompt itself/);
-	const input = context.messages[0].content[0].text;
-	assert.ok(input.includes(JSON.stringify(BRANCH.map((entry) => entry.message))));
-	assert.ok(input.endsWith("## User's Goal for New Thread\n\nimplement phase one"));
-	assert.equal(requestOptions.cacheRetention, "none");
-	assert.equal(requestOptions.sessionId, "session-id");
-	assert.ok(requestOptions.signal);
-
-	assert.deepEqual(h.calls.getModelOfType, [{ type: "classifier", provider: "typesafe", id: "jev-latest" }]);
-	assert.equal(h.calls.classify.length, 1);
-	const [rating] = h.calls.classify;
-	assert.equal(rating.model, JEV);
-	assert.deepEqual(Object.keys(rating.requestOptions), ["signal"]);
-	assert.equal(rating.requestOptions.signal, requestOptions.signal);
-	assert.deepEqual(structuredClone(rating.context), {
-		state: { prompt: "Generated prompt" },
-		questions: {
-			difficulty: {
-				type: "score",
-				instructions: "Rate the difficulty of the next task requested in this handoff prompt. Use the context to understand the task. Rate the work that remains, not completed work or prompt length. Do not choose a model.",
-				criteria: [
-					"Trivial: A mechanical, localized change or simple factual response. The required action is explicit and needs almost no investigation or judgment.",
-					"Routine: A familiar, bounded task with clear requirements. It needs ordinary implementation, documentation, or configuration work and straightforward verification.",
-					"Hard: Substantial reasoning, investigation, or review. It involves several interacting parts, ambiguous requirements, non-obvious bugs, or meaningful design trade-offs.",
-					"Very hard: Deep reasoning about subtle failures or architecture. It involves difficult concurrency, cross-cutting constraints, or substantial uncertainty with no straightforward solution.",
-				],
-			},
-		},
-	});
-	assert.equal(h.notifications.length, 2);
-	assert.deepEqual(h.notifications[0], {
-		text: "Handoff: Jev difficulty 2.25/3 -> anthropic/claude-opus-5-5. Override with /model in the new session before submitting.",
-		level: "info",
-	});
-	assert.deepEqual(h.events, [
-		"generate", "generated", "lookup", "classify", "classified", "loader-done", "notify:info",
-		"exec:split", "exec:start", "exec:send-text", "exec:focus", "exec:send-keys", "notify:info",
-	]);
-
-	assert.deepEqual(h.calls.editor, []);
-	assert.deepEqual(h.calls.getKeys, ["app.editor.external"]);
-	const name = `handoff-${NOW.toString(36)}`;
-	assert.match(name, /^[a-z][a-z0-9_-]{0,31}$/);
-	assert.deepEqual(h.calls.exec, [
-		{ command: "/bin/herdr", args: ["pane", "split", "--current", "--direction", "right", "--cwd", "/work/project", "--no-focus"] },
-		{
-			command: "/bin/herdr",
-			args: ["agent", "start", name, "--kind", "pi", "--pane", "w1:p2", "--", "--model", "anthropic/claude-opus-5-5"],
-		},
-		{ command: "/bin/herdr", args: ["pane", "send-text", "w1:p2", "Generated prompt"] },
-		{ command: "/bin/herdr", args: ["agent", "focus", "w1:p2"] },
-		{ command: "/bin/herdr", args: ["agent", "send-keys", "w1:p2", "ctrl+g"] },
-	]);
-	assert.equal(h.calls.setEditorText.length, 0);
-	assert.equal(h.calls.newSession, 0);
-	assert.equal(h.calls.sendUserMessage, 0);
-	assert.deepEqual(h.notifications.at(-1), {
-		text: "Handoff draft transferred to pane w1:p2. External-editor shortcut sent. Save and close the editor, then press Enter in Pi.",
-		level: "info",
-	});
-});
-
-for (const [label, options, reason, lookups, classifications] of [
-	["empty scope", { scopedModels: [] }, "no scoped models", 0, 0],
-	["missing Jev", { jev: undefined }, "Jev not in catalog", 1, 0],
-	["lookup throws", { onLookup: () => { throw new Error("lookup failed"); } }, "classification failed", 1, 0],
-	["call throws", { onClassify: () => { throw new Error("provider failed"); } }, "classification failed", 1, 1],
-	["call rejects", { onClassify: () => Promise.reject(new Error("network down")) }, "classification failed", 1, 1],
-	...["missing credentials", "network error", "provider error", "context limit"].map((errorMessage) => [
-		errorMessage, { classification: { stopReason: "error", errorMessage, answers: classification().answers } }, "classification failed", 1, 1,
-	]),
-	...[undefined, null, {}, { stopReason: "unknown", answers: classification().answers }].map((result, i) => [
-		`malformed result ${i}`, { classification: result }, "classification failed", 1, 1,
-	]),
-	...[undefined, null, {}, { difficulty: null }, { difficulty: { type: "choice", score: 2.25 } },
-		{ difficulty: { type: "bool", score: 2.25 } }, { difficulty: { score: 2.25 } },
-		...[undefined, null, "2.25", NaN, Infinity, -Infinity].map((score) => ({ difficulty: { type: "score", score } })),
-	].map((answers, i) => [
-		`invalid answer ${i}`, { classification: { stopReason: "stop", answers } }, "invalid difficulty score", 1, 1,
-	]),
-	...[undefined, null, {}, { output: "5" }, { output: -1 }, { output: NaN }, { output: Infinity }, { output: -Infinity }].map((cost, i) => [
-		`invalid scoped price ${i}`,
-		{ scopedModels: [...ELEVEN_MODELS, { model: { provider: "bad", id: "bad", cost } }] },
-		"invalid output prices", 0, 0,
-	]),
-]) {
-	test(`selection fallback: ${label}`, async () => {
-		const h = harness(options);
+	it("uses Pi's latest compaction summary and retained messages, not dropped history", async () => {
+		const session = piRuntime.SessionManager.inMemory(cwd);
+		const old = session.appendMessage(userMessage("Obsolete discussion"));
+		session.appendCompaction("Superseded summary", old, 100);
+		session.appendMessage(userMessage("Also obsolete"));
+		const kept = session.appendMessage(userMessage("Retained decision"));
+		session.appendCompaction("Current summary", kept, 200);
+		session.appendMessage(userMessage("Most recent task"));
+		const h = setup({ session });
 		await h.run();
-		assert.equal(h.calls.complete.length, 1);
-		assert.equal(h.calls.getModelOfType.length, lookups);
-		assert.equal(h.calls.classify.length, classifications);
-		assert.deepEqual(h.calls.exec[1].args.slice(-3), ["--", "--model", "test-provider/test-model"]);
-		assert.deepEqual(h.calls.exec[2].args, ["pane", "send-text", "w1:p2", "Generated prompt"]);
-		assert.deepEqual(h.notifications[0], {
-			text: `Handoff: Jev selection unavailable (${reason}). Using source model test-provider/test-model.`,
-			level: "warning",
-		});
-		assert.equal(h.notifications.length, 2);
-		assert.equal(h.notifications[1].level, "info");
-		assert.equal(h.ctx.model, MODEL);
-		assert.ok(!h.ctx.scopedModels.some(({ model }) => model === MODEL), "fallback source is outside scope");
-		assert.deepEqual(h.calls.setEditorText, []);
-		assert.ok(h.events.indexOf("loader-done") < h.events.indexOf("notify:warning"));
-		assert.ok(h.events.indexOf("notify:warning") < h.events.indexOf("exec:split"));
-		assert.equal(h.logs().length, 1);
-		const [log] = h.logs();
-		assert.deepEqual(log.decision, { outcome: "fallback", modelRef: "test-provider/test-model", reason });
-		assert.equal(log.request === null, classifications === 0);
-		if (options.classification?.errorMessage) assert.equal(log.response.errorMessage, options.classification.errorMessage);
-		if (options.onLookup || options.onClassify) assert.match(log.error, /lookup failed|provider failed|network down/);
+		const text = h.ctx.modelRegistry.complete.mock.calls[0].arguments[1].messages[0].content[0].text;
+		assert.match(text, /Current summary/);
+		assert.match(text, /Retained decision/);
+		assert.match(text, /Most recent task/);
+		assert.doesNotMatch(text, /Obsolete discussion|Superseded summary|Also obsolete/);
 	});
-}
 
-for (const [score, expectedIndex, display] of [[-2, 1, "0.00"], [0, 1, "0.00"], [2.249, 9, "2.25"], [3, 3, "3.00"], [7, 3, "3.00"]]) {
-	test(`classification score ${score} clamps and maps before display rounding`, async () => {
-		const h = harness({ classification: classification(score) });
+	it("replaces reasoning options without changing the rest of the payload", async () => {
+		const h = setup();
 		await h.run();
-		const model = ELEVEN_MODELS[expectedIndex].model;
-		assert.equal(h.calls.exec[1].args.at(-1), `${model.provider}/${model.id}`);
-		assert.ok(h.notifications[0].text.includes(`difficulty ${display}/3`));
+		const settings = h.ctx.modelRegistry.complete.mock.calls[0].arguments[2];
+		for (const reasoning of [undefined, { effort: "high", exclude: true, max_tokens: 4096 }]) {
+			const payload = { model: generator.id, messages: [], reasoning };
+			const result = settings.onPayload(payload);
+			assert.deepEqual(structuredClone(result), { ...payload, reasoning: { enabled: false } });
+			assert.equal(result.messages, payload.messages);
+			assert.equal(payload.reasoning, reasoning);
+		}
+		assert.equal(settings.reasoning, undefined);
+		assert.equal(settings.reasoningEffort, undefined);
+	});
+
+	it("joins only text blocks and trims only the prompt boundaries", async () => {
+		const h = setup({ complete: async () => ({ stopReason: "stop", content: [
+			{ type: "thinking", thinking: "Private reasoning" },
+			{ type: "text", text: "  First section\n" },
+			{ type: "toolCall", id: "unused", name: "unused", arguments: {} },
+			{ type: "text", text: "Last section  " },
+		] }) });
+		await h.run();
+		assert.equal(h.executions()[2].args[3], "First section\n\nLast section");
+	});
+
+	it("preserves a long multiline Unicode prompt as one literal CLI argument", async () => {
+		const prompt = `--literal $(touch nothing) 'quoted'\n${"café 日本語 λ\n".repeat(1500)}\n\`\`\`ts\nconst text = "next";\n\`\`\`\nFinal line`;
+		const h = setup({ complete: async () => answer(prompt) });
+		await h.run();
+		assert.deepEqual(h.executions()[2].args, ["pane", "send-text", destination, prompt]);
+	});
+
+	it("awaits each Herdr command before starting the next", async () => {
+		const stages = ["split", "start", "send-text", "focus", "send-keys"];
+		const gates = stages.map(() => ({ started: Promise.withResolvers(), finish: Promise.withResolvers() }));
+		const h = setup({ exec: async (_binary, args) => {
+			const gate = gates[stages.indexOf(args[1])];
+			gate.started.resolve();
+			await gate.finish.promise;
+			return args[1] === "split" ? splitResult() : success();
+		} });
+		const running = h.run();
+		for (const [index, gate] of gates.entries()) {
+			await gate.started.promise;
+			assert.deepEqual(h.executions().map(({ args }) => args[1]), stages.slice(0, index + 1));
+			assert.deepEqual(h.notifications, []);
+			gate.finish.resolve();
+		}
+		await running;
 		assert.equal(h.notifications[0].level, "info");
 	});
-}
 
-for (const confidence of [0, 0.01, undefined, NaN]) {
-	test(`confidence ${confidence} does not gate a valid score`, async () => {
-		const result = classification();
-		result.answers.difficulty.confidence = confidence;
-		const h = harness({ classification: result });
-		await h.run();
-		assert.equal(h.calls.exec[1].args.at(-1), "anthropic/claude-opus-5-5");
-		assert.equal(h.notifications[0].level, "info");
-	});
-}
-
-test("single scoped model still receives classification and a rating", async () => {
-	const h = harness({ scopedModels: [scopedModel("single", "free", 0, "xhigh")] });
-	await h.run();
-	assert.equal(h.calls.classify.length, 1);
-	assert.equal(h.calls.exec[1].args.at(-1), "single/free");
-	assert.match(h.notifications[0].text, /Jev difficulty 2\.25\/3 -> single\/free/);
-});
-
-test("captures scoped models after waiting for idle", async () => {
-	const h = harness({ scopedModels: [], onIdle: () => { h.ctx.scopedModels = ELEVEN_MODELS; } });
-	await h.run();
-	assert.equal(h.calls.classify.length, 1);
-	assert.equal(h.calls.exec[1].args.at(-1), "anthropic/claude-opus-5-5");
-});
-
-for (const stage of ["generation", "classification"]) {
-	test(`source and scope switches during ${stage} do not change the captured candidates`, async () => {
-		const scope = [...ELEVEN_MODELS];
-		const change = () => {
-			h.ctx.model = OTHER_MODEL;
-			scope.reverse();
-			scope.splice(0, scope.length, scopedModel("replacement", "model", 0));
-			h.ctx.scopedModels = [];
-		};
-		const h = harness({
-			scopedModels: scope,
-			onComplete: () => {
-				if (stage === "generation") change();
-				return Promise.resolve({ stopReason: "stop", content: [{ type: "text", text: "Generated prompt" }] });
-			},
-			onClassify: () => {
-				if (stage === "classification") change();
-				return Promise.resolve(classification());
-			},
-		});
-		await h.run();
-		assert.equal(h.calls.exec[1].args.at(-1), "anthropic/claude-opus-5-5");
-		assert.equal(h.calls.complete[0].model.id, "deepseek/deepseek-v4.1-flash:nitro");
-		assert.equal(h.ctx.model, OTHER_MODEL);
-	});
-}
-
-test("classification failure uses the source captured before model and scope switches", async () => {
-	const h = harness({ onClassify: () => {
-		h.ctx.model = OTHER_MODEL;
-		h.ctx.scopedModels = [];
-		return Promise.reject(new Error("network down"));
-	} });
-	await h.run();
-	assert.equal(h.calls.exec[1].args.at(-1), "test-provider/test-model");
-	assert.match(h.notifications[0].text, /Using source model test-provider\/test-model/);
-});
-
-test("pending classification keeps the loader open and prevents notifications and pane creation", async () => {
-	const pending = Promise.withResolvers();
-	const started = Promise.withResolvers();
-	const h = harness({ onClassify: () => { started.resolve(); return pending.promise; } });
-	const run = h.run();
-	await started.promise;
-	assertNoSideEffects(h);
-	assert.deepEqual(h.notifications, []);
-	assert.ok(!h.events.includes("loader-done"));
-	pending.resolve(classification());
-	await run;
-	assert.ok(h.events.indexOf("classified") < h.events.indexOf("loader-done"));
-	assert.ok(h.events.indexOf("loader-done") < h.events.indexOf("notify:info"));
-	assert.ok(h.events.indexOf("notify:info") < h.events.indexOf("exec:split"));
-});
-
-for (const late of ["success", "error", "rejection"]) {
-	for (const stage of ["generation", "classification"]) {
-		test(`Escape during ${stage} ignores late ${late}`, async () => {
-			const pending = Promise.withResolvers();
-			const started = Promise.withResolvers();
-			const h = harness({
-				[stage === "generation" ? "onComplete" : "onClassify"]: () => { started.resolve(); return pending.promise; },
-			});
-			const run = h.run();
-			await started.promise;
-			h.getLoader().abort();
-			await run;
-			assertNoSideEffects(h);
-			assert.deepEqual(h.notifications, [{ text: "Handoff cancelled", level: "info" }]);
-			assert.equal(h.calls.complete[0].requestOptions.signal.aborted, true);
-			if (late === "rejection") pending.reject(new Error("too late"));
-			else if (late === "error") pending.resolve({ stopReason: "error", errorMessage: "too late", content: [] });
-			else pending.resolve(stage === "generation"
-				? { stopReason: "stop", content: [{ type: "text", text: "Too late" }] } : classification());
-			await new Promise(setImmediate);
-			assertNoSideEffects(h);
-			assert.deepEqual(h.notifications, [{ text: "Handoff cancelled", level: "info" }]);
-			assert.equal(h.calls.getModelOfType.length, stage === "generation" ? 0 : 1);
-			assert.equal(h.calls.classify.length, stage === "generation" ? 0 : 1);
-			assert.equal(h.events.filter((event) => event === "loader-done").length, 1);
-			assert.equal(h.logs().length, stage === "generation" ? 0 : 1);
-			if (stage === "classification") {
-				const [log] = h.logs();
-				assert.deepEqual(log.decision, { outcome: "cancelled", modelRef: null, reason: "handoff cancelled" });
-				assert.deepEqual(log.request, structuredClone(h.calls.classify[0].context));
-				if (late === "success") assert.deepEqual(log.response, classification());
-				if (late === "error") assert.equal(log.response.errorMessage, "too late");
-				if (late === "rejection") assert.match(log.error, /too late/);
-			}
-		});
-	}
-}
-
-for (const [label, options, classifyCount] of [
-	["classifier reports aborted", { classification: { stopReason: "aborted", answers: classification().answers } }, 1],
-	["signal abort before lookup", { onComplete: (getLoader) => {
-		getLoader().controller.abort();
-		return Promise.resolve({ stopReason: "stop", content: [{ type: "text", text: "Generated prompt" }] });
-	} }, 0],
-	["lookup aborts then returns Jev", { onLookup: (getLoader) => { getLoader().controller.abort(); return JEV; } }, 0],
-	["lookup aborts then throws", { onLookup: (getLoader) => { getLoader().controller.abort(); throw new Error("aborted"); } }, 0],
-	["signal abort followed by generation rejection", { onComplete: (getLoader) => {
-		getLoader().controller.abort(); return Promise.reject(new Error("aborted"));
-	} }, 0],
-	["signal abort followed by classifier rejection", { onClassify: (getLoader) => {
-		getLoader().controller.abort(); return Promise.reject(new Error("aborted"));
-	} }, 1],
-	["signal abort followed by classifier success", { onClassify: (getLoader) => {
-		getLoader().controller.abort(); return Promise.resolve(classification());
-	} }, 1],
-]) {
-	test(`${label} cancels without fallback`, async () => {
-		const h = harness(options);
-		await h.run();
-		assertNoSideEffects(h);
-		assert.equal(h.calls.classify.length, classifyCount);
-		assert.deepEqual(h.notifications, [{ text: "Handoff cancelled", level: "info" }]);
-	});
-}
-
-test("classification log appends full requests and answers with the price-rank decision", async () => {
-	const prompt = "Review café\n日本語 and `code`.\nFinal line";
-	const result = { ...classification(2.249, 0.01), usage: { input: 123, output: 0, totalTokens: 123, cost: { total: 0.01 } } };
-	const h = harness({
-		agentDir: "/custom/pi-agent",
-		env: { ...HERDR_ENV, TYPESAFE_API_KEY: "secret-not-for-logging" },
-		classification: result,
-		response: { stopReason: "stop", content: [{ type: "text", text: `  ${prompt}  ` }] },
-	});
-	await h.run();
-	await h.run();
-	assert.equal(h.logWrites.length, 2);
-	assert.deepEqual(h.logErrors, []);
-	for (const directory of h.logDirectories) {
-		assert.deepEqual(directory, { path: "/custom/pi-agent/logs", settings: { recursive: true, mode: 0o700 } });
-	}
-	for (const write of h.logWrites) {
-		assert.equal(write.path, "/custom/pi-agent/logs/handoff-classifications.jsonl");
-		assert.deepEqual(write.settings, { encoding: "utf8", mode: 0o600 });
-		assert.equal(write.data.split("\n").length, 2, "one JSONL line even for multiline prompts");
-		assert.doesNotMatch(write.data, /secret-not-for-logging|TYPESAFE_API_KEY|signal/);
-	}
-	for (const log of h.logs()) {
-		assert.equal(log.timestamp, new Date(NOW).toISOString());
-		assert.equal(log.durationMs, 0);
-		assert.equal(log.sessionId, "source-session-id");
-		assert.equal(log.sessionFile, "/test/sessions/source.jsonl");
-		assert.equal(log.cwd, "/work/project");
-		assert.equal(log.classifier, "typesafe/jev-latest");
-		assert.equal(log.sourceModel, "test-provider/test-model");
-		assert.deepEqual(log.request, structuredClone(h.calls.classify[0].context));
-		assert.equal(log.request.state.prompt, prompt);
-		assert.deepEqual(log.response, result);
-		assert.equal(log.error, null);
-		assert.deepEqual(log.candidates, ELEVEN_MODELS.map(({ model }, scopeIndex) => ({
-			scopeIndex, modelRef: `${model.provider}/${model.id}`, outputPrice: model.cost.output,
-		})));
-		assert.deepEqual(log.rankedCandidates, PRICE_RANKS.map((i) => log.candidates[i]));
-		assert.equal(log.decision.outcome, "selected");
-		assert.equal(log.decision.modelRef, "openai-codex/gpt-5.6-sol");
-		assert.equal(log.decision.score, 2.249);
-		assert.equal(log.decision.rank, 7);
-		assert.match(log.decision.reason, /Math\.round.*stable ties.*confidence ignored/);
-	}
-});
-
-for (const score of [NaN, Infinity, -Infinity]) {
-	test(`classification log preserves nonfinite score ${score} for debugging`, async () => {
-		const h = harness({ classification: classification(score) });
-		await h.run();
-		assert.equal(h.logs()[0].response.answers.difficulty.score, String(score));
-		assert.equal(h.logs()[0].decision.outcome, "fallback");
-	});
-}
-
-for (const logFailure of ["mkdir", "append"]) {
-	test(`log ${logFailure} failure does not block selection or launch`, async () => {
-		const h = harness({ logFailure });
-		await h.run();
-		assert.equal(h.calls.exec.length, 5);
-		assert.equal(h.calls.exec[1].args.at(-1), "anthropic/claude-opus-5-5");
-		assert.equal(h.notifications.length, 2);
-		assert.ok(h.notifications.every(({ level }) => level === "info"));
-		assert.equal(h.logErrors.length, 1);
-		assert.match(h.logErrors[0], /Handoff classification log write failed: .*permission denied|Handoff classification log write failed: .*disk full/);
-	});
-}
-
-test("each Herdr command completes before the next command starts", async () => {
-	let pending = false;
-	const completed = [];
-	const h = harness({
-		onExec: async (key) => {
-			assert.equal(pending, false);
-			pending = true;
-			await new Promise(setImmediate);
-			completed.push(key);
-			pending = false;
-		},
-	});
-	await h.run();
-	assert.deepEqual(completed, ["split", "start", "send", "focus", "keys"]);
-	assert.equal(pending, false);
-	assert.equal(h.notifications.at(-1).level, "info");
-});
-
-test("first configured external-editor shortcut replaces ctrl+g", async () => {
-	const h = harness({ externalKeys: ["ctrl+shift+e", "alt+e"] });
-	await h.run();
-	assert.equal(h.calls.exec.length, 5);
-	assert.deepEqual(h.calls.exec[4].args, ["agent", "send-keys", "w1:p2", "ctrl+shift+e"]);
-	assert.equal(h.calls.setEditorText.length, 0);
-});
-
-test("disabled external-editor binding preserves transfer and focus without sending keys", async () => {
-	const h = harness({ externalKeys: [] });
-	await h.run();
-	assert.deepEqual(h.calls.exec.map(({ args }) => args.slice(0, 2)), [
-		["pane", "split"], ["agent", "start"], ["pane", "send-text"], ["agent", "focus"],
-	]);
-	assert.equal(h.calls.setEditorText.length, 0);
-	assert.equal(h.notifications.at(-1).level, "warning");
-	assert.match(h.notifications.at(-1).text, /transferred to pane w1:p2.*app\.editor\.external has no binding/);
-});
-
-test("fallback uses the source model selected after waiting for idle", async () => {
-	const h = harness({ scopedModels: [], onIdle: () => (h.ctx.model = OTHER_MODEL) });
-	await h.run();
-	assert.equal(h.calls.complete[0].model.provider, "openrouter");
-	assert.equal(h.calls.complete[0].model.id, "deepseek/deepseek-v4.1-flash:nitro");
-	assert.deepEqual(h.calls.exec[1].args.slice(-3), ["--", "--model", "other-provider/org/other-model:free"]);
-});
-
-test("model switches after capture do not affect generation or the source fallback", async () => {
-	const h = harness({
-		jev: undefined,
-		onComplete: () => {
-			h.ctx.model = OTHER_MODEL;
-			return Promise.resolve({ stopReason: "stop", content: [{ type: "text", text: "Generated prompt" }] });
-		},
-	});
-	await h.run();
-	assert.equal(h.calls.complete[0].model.provider, "openrouter");
-	assert.equal(h.calls.complete[0].model.id, "deepseek/deepseek-v4.1-flash:nitro");
-	assert.deepEqual(h.calls.exec[1].args.slice(-3), ["--", "--model", "test-provider/test-model"]);
-	assert.equal(h.notifications.at(-1).level, "info");
-});
-
-test("request payload disables reasoning and replaces all nested reasoning settings", async () => {
-	const h = harness();
-	await h.run();
-	const { model, requestOptions } = h.calls.complete[0];
-	for (const reasoning of [undefined, { effort: "high", exclude: true, max_tokens: 8192 }]) {
-		const payload = { model: model.id, messages: [], reasoning };
-		const result = await requestOptions.onPayload(payload, model);
-		assert.deepEqual({ ...result.reasoning }, { enabled: false });
-		assert.equal(result.model, model.id);
-		assert.equal(result.messages, payload.messages);
-	}
-	assert.equal(requestOptions.reasoning, undefined);
-	assert.equal(requestOptions.reasoningEffort, undefined);
-	assert.equal(requestOptions.maxTokens, undefined);
-});
-
-test("long multiline Unicode and code blocks reach send-text unchanged", async () => {
-	const prompt = `## Context\n${"Keep café, 日本語, and λ intact.\n".repeat(1000)}\n\`\`\`ts\nconst goal = "next task";\n\`\`\`\nFinal line`;
-	const h = harness({ response: { stopReason: "stop", content: [{ type: "text", text: prompt }] } });
-	await h.run();
-	assert.deepEqual(h.calls.exec[2].args, ["pane", "send-text", "w1:p2", prompt]);
-	assert.deepEqual(structuredClone(h.calls.classify[0].context.state), { prompt });
-});
-
-test("herdr defaults to the PATH binary when HERDR_BIN_PATH is unset", async () => {
-	const h = harness({ env: { HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1" } });
-	await h.run();
-	assert.ok(h.calls.exec.every(({ command }) => command === "herdr"));
-});
-
-test("compacted branch sends the latest summary plus retained and later entries", async () => {
-	const branch = [
-		message("old", "user", "old work"),
-		{ type: "compaction", id: "c1", summary: "first summary", tokensBefore: 10, firstKeptEntryId: "old", timestamp: "2026-01-01T00:00:00Z" },
-		message("dropped", "assistant", "summarized away"),
-		message("kept", "user", "kept work"),
-		{ type: "model_change", id: "mc" },
-		{ type: "compaction", id: "c2", summary: "latest summary", tokensBefore: 99, firstKeptEntryId: "kept", timestamp: "2026-01-02T00:00:00Z" },
-		message("after", "assistant", "recent work"),
-	];
-	const h = harness({ branch });
-	await h.run();
-	const input = h.calls.complete[0].context.messages[0].content[0].text;
-	const serialized = JSON.parse(input.split("\n\n")[1]);
-	assert.deepEqual(serialized, [
-		{ role: "compactionSummary", summary: "latest summary", tokensBefore: 99, timestamp: Date.parse("2026-01-02T00:00:00Z") },
-		branch[3].message,
-		branch[6].message,
-	]);
-});
-
-for (const [label, options, args, pattern] of [
-	["missing goal", {}, "   ", /Usage: \/handoff/],
-	["non-TUI mode", { mode: "rpc" }, undefined, /requires interactive mode/],
-	["missing model", { model: undefined }, undefined, /No model selected/],
-	["missing generator", { generator: undefined }, undefined, /requires openrouter\/deepseek\/deepseek-v4\.1-flash.*pi update --models.*reload Pi/],
-	["missing HERDR_ENV", { env: { HERDR_PANE_ID: "w1:p1" } }, undefined, /inside a Herdr pane/],
-	["missing HERDR_PANE_ID", { env: { HERDR_ENV: "1" } }, undefined, /inside a Herdr pane/],
-	["no usable history", { branch: [{ type: "model_change", id: "mc" }] }, undefined, /No conversation/],
-]) {
-	test(`${label} stops before generation`, async () => {
-		const h = harness(options);
-		await h.run(args);
-		assert.equal(h.calls.complete.length, 0);
-		assert.deepEqual(h.logWrites, []);
-		assert.equal(h.calls.getModelOfType.length, 0);
-		assert.equal(h.calls.classify.length, 0);
-		assert.equal(h.calls.editor.length, 0);
-		assertNoSideEffects(h);
-		assert.equal(h.notifications.at(-1).level, "error");
-		assert.match(h.notifications.at(-1).text, pattern);
-	});
-}
-
-for (const [label, options, level, pattern] of [
-	["aborted response", { response: { stopReason: "aborted", content: [] } }, "info", /cancelled/],
-	[
-		"loader cancellation",
-		{ onComplete: (getLoader) => new Promise((resolve) => setImmediate(() => { getLoader().abort(); resolve({ stopReason: "aborted", content: [] }); })) },
-		"info",
-		/cancelled/,
-	],
-	["blank response", { response: { stopReason: "stop", content: [{ type: "text", text: "  \n" }] } }, "error", /empty prompt/],
-	["error response", { response: { stopReason: "error", errorMessage: "context too long", content: [] } }, "error", /context too long/],
-	["rejected request", { onComplete: () => Promise.reject(new Error("network down")) }, "error", /network down/],
-	[
-		"loader cancellation followed by a late successful response",
-		{ onComplete: (getLoader) => new Promise((resolve) => setImmediate(() => { getLoader().abort(); resolve({ stopReason: "stop", content: [{ type: "text", text: "Too late" }] }); })) },
-		"info",
-		/cancelled/,
-	],
-]) {
-	test(`${label} makes no Herdr calls`, async () => {
-		const h = harness(options);
-		await h.run();
-		await new Promise(setImmediate);
-		assertNoSideEffects(h);
-		assert.equal(h.calls.complete.length, 1);
-		assert.equal(h.calls.getModelOfType.length, 0);
-		assert.equal(h.calls.classify.length, 0);
-		assert.equal(h.notifications.length, 1);
-		assert.equal(h.notifications[0].level, level);
-		assert.match(h.notifications[0].text, pattern);
-	});
-}
-
-const failure = { code: 1, stdout: "", stderr: '{"error":{"code":"boom","message":"it broke"}}' };
-for (const [label, exec, execCount, pattern] of [
-	["split failure", { split: failure }, 1, /herdr pane split failed: .*it broke.*No pane was created\./],
-	["invalid split JSON", { split: { code: 0, stdout: "not json", stderr: "" } }, 1, /invalid JSON.*No pane was created\./],
-	["missing pane ID", { split: { code: 0, stdout: '{"result":{"pane":{}}}', stderr: "" } }, 1, /no pane ID.*No pane was created\./],
-	["start failure", { start: failure }, 2, /herdr agent start failed: .*it broke.*Pane w1:p2 was created/],
-	["send failure", { send: failure }, 3, /herdr pane send-text failed: .*it broke.*Pane w1:p2 was created/],
-]) {
-	test(`${label} restores the generated prompt and reports the error`, async () => {
-		const h = harness({ exec });
-		await h.run();
-		assert.equal(h.calls.exec.length, execCount);
-		assert.deepEqual(h.calls.setEditorText, ["Generated prompt"]);
-		assert.equal(h.calls.classify.length, 1);
-		assert.equal(h.notifications.length, 2);
-		assert.equal(h.notifications[0].level, "info");
-		assert.equal(h.notifications.at(-1).level, "error");
-		assert.match(h.notifications.at(-1).text, pattern);
-		assert.match(h.notifications.at(-1).text, /restored to the editor/);
-		assert.equal(h.calls.newSession, 0);
-	});
-}
-
-for (const [stage, key, execCount, pattern] of [
-	["focus", "focus", 4, /focus failed: .*herdr agent focus failed.*Select that pane and open Pi's external editor manually/],
-	["shortcut", "keys", 5, /shortcut delivery failed: .*herdr agent send-keys failed.*Review the draft in that pane manually/],
-]) {
-	for (const rejects of [false, true]) {
-		test(`${stage} ${rejects ? "rejection" : "failure"} preserves the destination draft without source recovery`, async () => {
-			const h = harness({
-				externalKeys: ["ctrl+shift+e", "ctrl+g"],
-				exec: { [key]: failure },
-				onExec: rejects ? async (current) => {
-					if (current === key) throw new Error("CLI unavailable");
-				} : undefined,
-			});
+	for (const [label, configure, pattern] of [
+		["RPC mode", (h) => { h.ctx.mode = "rpc"; }, /requires interactive mode/],
+		["print mode", (h) => { h.ctx.mode = "print"; }, /requires interactive mode/],
+		["missing model", (h) => { h.ctx.model = undefined; }, /No model selected/],
+	]) {
+		it(`rejects ${label} before generation`, async () => {
+			const h = setup();
+			configure(h);
 			await h.run();
-			assert.equal(h.calls.exec.length, execCount);
-			assert.deepEqual(h.calls.exec[2].args, ["pane", "send-text", "w1:p2", "Generated prompt"]);
-			assert.deepEqual(h.calls.setEditorText, []);
-			assert.equal(h.notifications.length, 2);
-			assert.equal(h.notifications[0].level, "info");
-			assert.equal(h.notifications[1].level, "warning");
-			assert.match(h.notifications[1].text, /Handoff draft transferred to pane w1:p2/);
-			assert.match(h.notifications[1].text, rejects ? /CLI unavailable/ : pattern);
-			assert.doesNotMatch(h.notifications[1].text, /restored|shortcut sent|editor opened/i);
+			assert.equal(h.ctx.modelRegistry.complete.mock.callCount(), 0);
+			assert.equal(h.ctx.ui.custom.mock.callCount(), 0);
+			assert.deepEqual(h.executions(), []);
+			assertSourceUntouched(h);
+			assertError(h, pattern);
 		});
 	}
-}
+
+	for (const goal of ["", " \n\t "]) {
+		it(`rejects an empty goal ${JSON.stringify(goal)}`, async () => {
+			const h = setup();
+			await h.run(goal);
+			assert.equal(h.ctx.waitForIdle.mock.callCount(), 0);
+			assert.equal(h.ctx.modelRegistry.complete.mock.callCount(), 0);
+			assert.deepEqual(h.executions(), []);
+			assertSourceUntouched(h);
+			assertError(h, /Usage: \/handoff/);
+		});
+	}
+
+	for (const env of [{}, { HERDR_PANE_ID: "source" }, { HERDR_ENV: "0", HERDR_PANE_ID: "source" }, { HERDR_ENV: "1" }, { HERDR_ENV: "1", HERDR_PANE_ID: "" }]) {
+		it(`rejects invalid Herdr environment ${JSON.stringify(env)}`, async () => {
+			const h = setup({ env });
+			await h.run();
+			assert.equal(h.ctx.waitForIdle.mock.callCount(), 0);
+			assert.equal(h.ctx.modelRegistry.complete.mock.callCount(), 0);
+			assert.deepEqual(h.executions(), []);
+			assertSourceUntouched(h);
+			assertError(h, /inside a Herdr pane/);
+		});
+	}
+
+	it("reports a missing generator without a fallback request", async () => {
+		const h = setup();
+		h.ctx.modelRegistry.find.mock.mockImplementation(() => undefined);
+		await h.run();
+		assert.equal(h.ctx.modelRegistry.complete.mock.callCount(), 0);
+		assert.deepEqual(h.executions(), []);
+		assertSourceUntouched(h);
+		assertError(h, /deepseek\/deepseek-v4\.1-flash not found.*pi update --models.*reload Pi/);
+	});
+
+	it("rejects an empty projected conversation", async () => {
+		const h = setup({ session: piRuntime.SessionManager.inMemory(cwd) });
+		await h.run();
+		assert.equal(h.ctx.modelRegistry.complete.mock.callCount(), 0);
+		assert.deepEqual(h.executions(), []);
+		assertSourceUntouched(h);
+		assertError(h, /Conversation must not be empty/);
+	});
+
+	for (const [label, complete, pattern] of [
+		["empty text", async () => answer(" \n "), /empty prompt/],
+		["no text blocks", async () => ({ stopReason: "stop", content: [{ type: "thinking", thinking: "Only reasoning" }] }), /empty prompt/],
+		["provider error", async () => ({ ...answer("Partial text"), stopReason: "error", errorMessage: "Quota exceeded" }), /Quota exceeded/],
+		["provider error without a message", async () => ({ ...answer(), stopReason: "error" }), /Model request failed/],
+		["aborted response", async () => ({ ...answer("Partial text"), stopReason: "aborted" }), /Prompt generation aborted/],
+		["rejected request", async () => { throw new Error("Network unavailable"); }, /Network unavailable/],
+		["non-Error rejection", async () => { throw "Request refused"; }, /Request refused/],
+	]) {
+		it(`reports ${label} without launching or replacing the source draft`, async () => {
+			const h = setup({ complete });
+			await h.run();
+			assert.equal(h.ctx.modelRegistry.complete.mock.callCount(), 1);
+			assert.deepEqual(h.executions(), []);
+			assertSourceUntouched(h);
+			assertError(h, pattern);
+		});
+	}
+
+	for (const outcome of ["success", "provider error", "rejection"]) {
+		it(`Escape cancels immediately and ignores late ${outcome}`, async () => {
+			const started = Promise.withResolvers();
+			const pending = Promise.withResolvers();
+			const h = setup({ complete: () => { started.resolve(); return pending.promise; } });
+			const running = h.run();
+			await started.promise;
+			assert.deepEqual(h.executions(), []);
+			assert.deepEqual(h.notifications, []);
+			assert.ok(!h.events.includes("loader closed"));
+			h.loaders[0].cancel();
+			await running;
+			assert.equal(h.ctx.modelRegistry.complete.mock.calls[0].arguments[2].signal.aborted, true);
+			assertSourceUntouched(h);
+			assert.deepEqual(h.executions(), []);
+			assert.deepEqual(h.notifications, []);
+
+			if (outcome === "rejection") pending.reject(new Error("Late rejection"));
+			else pending.resolve(outcome === "success" ? answer("Too late") : { stopReason: "error", errorMessage: "Too late", content: [] });
+			await settle();
+			assertSourceUntouched(h);
+			assert.deepEqual(h.executions(), []);
+			assert.deepEqual(h.notifications, []);
+			assert.equal(h.events.filter((event) => event === "loader closed").length, 1);
+		});
+	}
+
+	for (const [index, stage] of ["split", "start", "send-text", "focus", "send-keys"].entries()) {
+		for (const failure of ["exit code", "rejection"]) {
+			it(`restores the prompt and stops after ${stage} ${failure}`, async () => {
+				const h = setup({ exec: async (_binary, args) => {
+					if (args[1] === stage) {
+						if (failure === "rejection") throw new Error("CLI unavailable");
+						return { code: 1, stdout: "", stderr: "Operation failed" };
+					}
+					return args[1] === "split" ? splitResult() : success();
+				} });
+				await h.run();
+				assert.equal(h.executions().length, index + 1);
+				assert.deepEqual(h.drafts, ["Continue the implementation."]);
+				assert.equal(h.editorText(), "Continue the implementation.");
+				assertError(h, failure === "rejection" ? /CLI unavailable/ : /Operation failed/);
+				assert.match(h.notifications[0].text, /prompt was restored to the editor/);
+				if (index > 2) assert.equal(h.executions()[2].args[3], h.editorText());
+			});
+		}
+	}
+
+	for (const stdout of ["not JSON", '{"result":{"pane":{}}}']) {
+		it(`restores the prompt when split returns ${stdout}`, async () => {
+			const h = setup({ exec: async () => success(stdout) });
+			await h.run();
+			assert.equal(h.executions().length, 1);
+			assert.deepEqual(h.drafts, ["Continue the implementation."]);
+			assertError(h, /invalid JSON|no pane ID/);
+		});
+	}
+});
+
+describe("Herdr CLI adapter", () => {
+	function adapter(env = {}) {
+		const exec = mock.fn(async () => success());
+		const { createHerdr } = loadModules(env)("herdr");
+		return { exec, herdr: createHerdr({ exec }) };
+	}
+
+	for (const direction of ["left", "right", "up", "down"]) {
+		it(`splits ${direction} without focusing and returns the parsed pane ID`, async () => {
+			const { exec, herdr } = adapter();
+			exec.mock.mockImplementation(async () => splitResult());
+			assert.equal(await herdr.splitPane(direction, cwd), destination);
+			assert.equal(exec.mock.callCount(), 1);
+			const [binary, args] = exec.mock.calls[0].arguments;
+			assert.equal(binary, "herdr");
+			assert.deepEqual(Array.from(args), ["pane", "split", "--current", "--direction", direction, "--cwd", cwd, "--no-focus"]);
+		});
+	}
+
+	for (const [method, args, command] of [
+		["startPiAgent", [destination, "handoff-test", "provider/org/model:variant"], ["agent", "start", "handoff-test", "--kind", "pi", "--pane", destination, "--", "--model", "provider/org/model:variant"]],
+		["sendText", [destination, "--literal\n'quotes' $(nothing)"], ["pane", "send-text", destination, "--literal\n'quotes' $(nothing)"]],
+		["sendKeys", [destination, "ctrl+shift+e"], ["agent", "send-keys", destination, "ctrl+shift+e"]],
+		["focusAgent", [destination], ["agent", "focus", destination]],
+	]) {
+		it(`${method} invokes one command with literal arguments`, async () => {
+			const { exec, herdr } = adapter({ HERDR_BIN_PATH: "/bin path/herdr" });
+			assert.equal(await herdr[method](...args), undefined);
+			assert.equal(exec.mock.callCount(), 1);
+			const [binary, actual] = exec.mock.calls[0].arguments;
+			assert.equal(binary, "/bin path/herdr");
+			assert.deepEqual(Array.from(actual), command);
+		});
+	}
+
+	for (const bin of [undefined, ""]) {
+		it(`uses PATH when HERDR_BIN_PATH is ${JSON.stringify(bin)}`, async () => {
+			const { exec, herdr } = adapter({ HERDR_BIN_PATH: bin });
+			await herdr.focusAgent(destination);
+			assert.equal(exec.mock.calls[0].arguments[0], "herdr");
+		});
+	}
+
+	for (const [result, expected] of [
+		[{ code: 3, stdout: "stdout detail", stderr: "  stderr detail\n" }, "herdr agent focus failed: stderr detail"],
+		[{ code: 4, stdout: " stdout detail\n", stderr: " \n" }, "herdr agent focus failed: stdout detail"],
+		[{ code: 5, stdout: "", stderr: "" }, "herdr agent focus failed: exit code 5"],
+	]) {
+		it(`reports CLI failure detail: ${expected}`, async () => {
+			const { exec, herdr } = adapter();
+			exec.mock.mockImplementation(async () => result);
+			await assert.rejects(herdr.focusAgent(destination), { message: expected });
+			assert.equal(exec.mock.callCount(), 1);
+		});
+	}
+
+	it("propagates process execution errors without retrying", async () => {
+		const { exec, herdr } = adapter();
+		const error = new Error("spawn ENOENT");
+		exec.mock.mockImplementation(async () => { throw error; });
+		await assert.rejects(herdr.sendText(destination, "draft"), (actual) => actual === error);
+		assert.equal(exec.mock.callCount(), 1);
+	});
+
+	for (const stdout of ["", "not JSON", "{broken", "null", "{}", '{"result":{}}', '{"result":{"pane":{}}}', ...[null, 12, false, ""].map((pane_id) => JSON.stringify({ result: { pane: { pane_id } } }))]) {
+		it(`rejects unusable split output ${JSON.stringify(stdout)}`, async () => {
+			const { exec, herdr } = adapter();
+			exec.mock.mockImplementation(async () => success(stdout));
+			await assert.rejects(herdr.splitPane("right", cwd), /herdr pane split returned (invalid JSON|no pane ID)/);
+			assert.equal(exec.mock.callCount(), 1);
+		});
+	}
+});

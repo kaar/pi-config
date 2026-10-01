@@ -111,17 +111,10 @@ function errorText(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+
 function appendClassificationLog(record: Record<string, unknown>): void {
-	try {
-		const directory = join(getAgentDir(), "logs");
-		mkdirSync(directory, { recursive: true, mode: 0o700 });
-		// Preserve nonfinite values as strings rather than silently converting them to null.
-		const line = JSON.stringify(record, (_key, value) =>
-			typeof value === "number" && !Number.isFinite(value) ? String(value) : value);
-		appendFileSync(join(directory, "handoff-classifications.jsonl"), `${line}\n`, { encoding: "utf8", mode: 0o600 });
-	} catch (error) {
-		console.error(`Handoff classification log write failed: ${errorText(error)}`);
-	}
+	const logFile = join(getAgentDir(), "logs", "handoff-classifications.jsonl")
+	appendFileSync(logFile, `${JSON.stringify(record)}\n`, "utf8");
 }
 
 function prepareHandoff(
@@ -356,7 +349,7 @@ async function launchSuccessor(
 	);
 }
 
-export default function (pi: ExtensionAPI) {
+export default function(pi: ExtensionAPI) {
 	pi.registerCommand("handoff", {
 		description: "Continue this work in a fresh Pi session in a new Herdr pane",
 		handler: async (args, ctx) => {

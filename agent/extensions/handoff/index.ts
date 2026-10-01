@@ -8,8 +8,8 @@
  * with reasoning disabled. Starts Pi with the source model in a new right-hand
  * Herdr pane, pastes the prompt, focuses the pane, and sends Pi's
  * external-editor shortcut. Saving and closing the editor returns to an
- * unsubmitted draft. If the launch fails, the prompt is restored to the source
- * editor. The source session is not changed.
+ * unsubmitted draft. If the launch fails, the command reports the error.
+ * The source session and editor are not changed.
  */
 
 import { type TextContent, uuidv7 } from "@earendil-works/pi-ai";
@@ -95,13 +95,22 @@ async function createHandoffPrompt(
 	return prompt;
 }
 
-async function launchSuccessor(herdr: Herdr, cwd: string, modelRef: string, prompt: string): Promise<string> {
+async function launchSuccessor(
+	herdr: Herdr,
+	cwd: string,
+	modelRef: string,
+	prompt: string
+): Promise<string> {
 	const paneId = await herdr.splitPane("right", cwd);
-	await herdr.startPiAgent(paneId, `handoff-${Date.now().toString(36)}`, modelRef);
-	await herdr.sendText(paneId, prompt);
-	// TODO: Could be replace by removing --no-focus?
-	await herdr.focusAgent(paneId);
-	await herdr.sendKeys(paneId, "ctrl+g");
+	try {
+		await herdr.startPiAgent(paneId, `handoff-${Date.now().toString(36)}`, modelRef);
+		await herdr.sendText(paneId, prompt);
+		// TODO: Could be replace by removing --no-focus?
+		await herdr.focusAgent(paneId);
+		await herdr.sendKeys(paneId, "ctrl+g");
+	} catch (error) {
+		throw new Error(`pane ${paneId}: ${errorText(error)}`, { cause: error });
+	}
 	return paneId;
 }
 
@@ -115,7 +124,8 @@ async function withLoader<T>(
 	const finished = await ctx.ui.custom<boolean>((tui, theme, _keybindings, done) => {
 		const loader = new BorderedLoader(tui, theme, label);
 		loader.onAbort = () => done(false);
-		result = task(loader.signal);
+		// Let Pi capture the loader before even an immediate failure calls done.
+		result = Promise.resolve().then(() => task(loader.signal));
 		result.then(() => done(true), () => done(true));
 		return loader;
 	});
@@ -153,9 +163,8 @@ export default function(pi: ExtensionAPI) {
 			}
 
 			const modelRef = `${model.provider}/${model.id}`;
-			let handoffPrompt: string | undefined;
 			try {
-				handoffPrompt = await withLoader(ctx, "Generating handoff prompt...", (signal) =>
+				const handoffPrompt = await withLoader(ctx, "Generating handoff prompt...", (signal) =>
 					createHandoffPrompt(ctx, goal, signal));
 				if (!handoffPrompt) return;
 				const paneId = await launchSuccessor(createHerdr(pi), ctx.cwd, modelRef, handoffPrompt);
@@ -164,9 +173,7 @@ export default function(pi: ExtensionAPI) {
 					"info",
 				);
 			} catch (error) {
-				if (handoffPrompt) ctx.ui.setEditorText(handoffPrompt);
-				const restored = handoffPrompt ? " The prompt was restored to the editor." : "";
-				ctx.ui.notify(`Handoff failed: ${errorText(error)}.${restored}`, "error");
+				ctx.ui.notify(`Handoff failed: ${errorText(error)}`, "error");
 			}
 		},
 	});

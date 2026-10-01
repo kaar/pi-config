@@ -61,6 +61,7 @@ function setup(options = {}) {
 		constructor(_tui, _theme, label) {
 			this.label = label;
 			this.controller = new AbortController();
+			this.dispose = mock.fn();
 			loaders.push(this);
 		}
 		get signal() { return this.controller.signal; }
@@ -99,18 +100,22 @@ function setup(options = {}) {
 		ui: {
 			notify: (text, level) => notifications.push({ text, level }),
 			setEditorText: (text) => { drafts.push(text); editorText = text; },
-			// Model completion and Escape can both call done. Pi accepts only the
-			// first result. Terminal mounting and loader disposal are not simulated.
-			custom: mock.fn((factory) => new Promise((resolve) => {
+			// Match Pi's asynchronous mount: done can only dispose a captured
+			// component. Completion before mounting otherwise leaks the loader.
+			custom: mock.fn((factory) => new Promise((resolve, reject) => {
+				let component;
 				let closed = false;
-				factory({}, {}, {
+				Promise.resolve(factory({}, {}, {
 					getKeys: () => assert.fail("Handoff must not inspect editor keybindings"),
 				}, (value) => {
 					if (closed) return;
 					closed = true;
 					events.push("loader closed");
 					resolve(value);
-				});
+					component?.dispose();
+				})).then((mounted) => {
+					if (!closed) component = mounted;
+				}).catch(reject);
 			})),
 		},
 	};
@@ -134,6 +139,11 @@ function setup(options = {}) {
 function assertSourceUntouched(h) {
 	assert.deepEqual(h.drafts, []);
 	assert.equal(h.editorText(), "Existing source draft");
+}
+
+function assertLoaderDisposed(h) {
+	assert.equal(h.loaders.length, 1);
+	assert.equal(h.loaders[0].dispose.mock.callCount(), 1);
 }
 
 function assertError(h, pattern) {
@@ -189,6 +199,7 @@ describe("handoff command", { timeout: 5000 }, () => {
 			text: `Handoff draft sent to pane ${destination}. Save and close the editor, then press Enter in Pi.`,
 			level: "info",
 		}]);
+		assertLoaderDisposed(h);
 		assert.equal(h.ctx.model, sourceModel);
 		assert.deepEqual(h.session.getEntries(), originalEntries);
 		assertSourceUntouched(h);
@@ -332,6 +343,7 @@ describe("handoff command", { timeout: 5000 }, () => {
 		assert.deepEqual(h.executions(), []);
 		assertSourceUntouched(h);
 		assertError(h, /deepseek\/deepseek-v4\.1-flash not found.*pi update --models.*reload Pi/);
+		assertLoaderDisposed(h);
 	});
 
 	it("rejects an empty projected conversation", async () => {
@@ -341,6 +353,7 @@ describe("handoff command", { timeout: 5000 }, () => {
 		assert.deepEqual(h.executions(), []);
 		assertSourceUntouched(h);
 		assertError(h, /Conversation must not be empty/);
+		assertLoaderDisposed(h);
 	});
 
 	for (const [label, complete, pattern] of [
@@ -356,6 +369,7 @@ describe("handoff command", { timeout: 5000 }, () => {
 			const h = setup({ complete });
 			await h.run();
 			assert.equal(h.ctx.modelRegistry.complete.mock.callCount(), 1);
+			assertLoaderDisposed(h);
 			assert.deepEqual(h.executions(), []);
 			assertSourceUntouched(h);
 			assertError(h, pattern);
@@ -386,12 +400,13 @@ describe("handoff command", { timeout: 5000 }, () => {
 			assert.deepEqual(h.executions(), []);
 			assert.deepEqual(h.notifications, []);
 			assert.equal(h.events.filter((event) => event === "loader closed").length, 1);
+			assertLoaderDisposed(h);
 		});
 	}
 
 	for (const [index, stage] of ["split", "start", "send-text", "focus", "send-keys"].entries()) {
 		for (const failure of ["exit code", "rejection"]) {
-			it(`restores the prompt and stops after ${stage} ${failure}`, async () => {
+			it(`reports the error without changing the source draft and stops after ${stage} ${failure}`, async () => {
 				const h = setup({ exec: async (_binary, args) => {
 					if (args[1] === stage) {
 						if (failure === "rejection") throw new Error("CLI unavailable");
@@ -401,22 +416,25 @@ describe("handoff command", { timeout: 5000 }, () => {
 				} });
 				await h.run();
 				assert.equal(h.executions().length, index + 1);
-				assert.deepEqual(h.drafts, ["Continue the implementation."]);
-				assert.equal(h.editorText(), "Continue the implementation.");
+				assertSourceUntouched(h);
 				assertError(h, failure === "rejection" ? /CLI unavailable/ : /Operation failed/);
-				assert.match(h.notifications[0].text, /prompt was restored to the editor/);
-				if (index > 2) assert.equal(h.executions()[2].args[3], h.editorText());
+				assert.doesNotMatch(h.notifications[0].text, /restored/);
+				const detail = failure === "rejection" ? "CLI unavailable"
+					: `herdr ${index === 0 || index === 2 ? "pane" : "agent"} ${stage} failed: Operation failed`;
+				assert.equal(h.notifications[0].text, `Handoff failed: ${index > 0 ? `pane ${destination}: ` : ""}${detail}`);
+				if (index > 2) assert.equal(h.executions()[2].args[3], "Continue the implementation.");
 			});
 		}
 	}
 
 	for (const stdout of ["not JSON", '{"result":{"pane":{}}}']) {
-		it(`restores the prompt when split returns ${stdout}`, async () => {
+		it(`reports the error without changing the source draft when split returns ${stdout}`, async () => {
 			const h = setup({ exec: async () => success(stdout) });
 			await h.run();
 			assert.equal(h.executions().length, 1);
-			assert.deepEqual(h.drafts, ["Continue the implementation."]);
+			assertSourceUntouched(h);
 			assertError(h, /invalid JSON|no pane ID/);
+			assert.doesNotMatch(h.notifications[0].text, /restored/);
 		});
 	}
 });

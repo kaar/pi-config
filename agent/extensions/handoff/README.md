@@ -34,7 +34,7 @@ Source and destination use the same local Pi configuration. After editor configu
 
 - Escape during generation cancels the handoff. No pane is created and the source draft is unchanged.
 - A generation failure reports an error. No pane is created. There is no generation fallback.
-- A failure in any Herdr command restores the generated prompt to the source editor. The command does not close panes it created. If focus or key delivery fails, the draft is in both the source and the destination.
+- A failure in any Herdr command reports an error and leaves the source editor unchanged. After a successful split, the error includes the destination pane ID. The command does not close panes it created.
 - Pi handles editor startup failure or cancellation. The handoff command does not resend the prompt or submit it.
 
 Not supported: successor model selection, thinking-level carry-over, generation fallback, other multiplexers, handoff-specific configuration, retries.
@@ -78,4 +78,4 @@ Manual checks require live requests and pane creation:
 - [ ] Works after `/compact`. Refuses outside Herdr.
 - [ ] Escape during generation creates no pane.
 - [ ] An OpenRouter failure reports an error without a new pane.
-- [ ] If the new Pi cannot resolve the model, the prompt is restored to the source editor.
+- [ ] If the new Pi cannot resolve the model, the command reports an error and leaves the source editor unchanged.

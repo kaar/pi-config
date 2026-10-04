@@ -160,3 +160,52 @@ I would like Jev to monitor and suggest next command.
 There is already an example of this.
 
 Oh a
+
+## Create QR link skill
+
+Create a skill that turns a URL into a QR code, so I can scan it with my phone and open the link there. The first use case was opening a newly created secret gist on my phone.
+
+### What the agent did manually
+
+1. Made sure `qrencode` was installed, and installed it with Homebrew if it was missing:
+   ```bash
+   command -v qrencode || brew install qrencode
+   ```
+2. Printed the QR code directly in the terminal, so I could scan it without opening a file:
+   ```bash
+   qrencode -t ANSIUTF8 -m 2 "<url>"
+   ```
+   - `-t ANSIUTF8` draws the code with Unicode block characters.
+   - `-m 2` sets a 2-module quiet zone (the white border). A smaller margin than the default makes the code fit better in the terminal.
+3. Also saved the QR code as a PNG, which works better if the terminal rendering does not scan:
+   ```bash
+   qrencode -o /tmp/gist-qr.png -s 10 "<url>"
+   ```
+   - `-s 10` makes each module 10 pixels.
+   - The agent then read the PNG with the `read` tool so the image showed in the conversation. It can be opened with `open /tmp/gist-qr.png`.
+4. Tried to check that the code decodes back to the URL with `zbarimg -q /tmp/gist-qr.png`. `zbarimg` was not installed, so this step was skipped and I had to check the result on my phone.
+5. Reported the URL in plain text next to the QR code, and warned that anyone who scans the code can open the secret gist.
+
+### Ideas for the skill
+
+- Take the URL as input. If no URL is given, use the last URL in the conversation.
+- Always print the terminal version first, then save a PNG as a fallback.
+- Use a unique temp file (for example `mktemp -t qr.XXXXXX.png`) instead of a fixed path in `/tmp`.
+- Check the result with `zbarimg` (from the `zbar` Homebrew package) when it is installed, and say clearly when the check was skipped.
+- Warn when the URL points to private or secret content (secret gists, signed URLs, URLs with tokens in them).
+- Maybe write it as a small script (like `q-pi`) instead of only a skill, because the steps never change.
+
+## Handoff extension
+
+Ideas from comparing other Pi handoff extensions (`agent/extensions/handoff/`).
+
+- [ ] Replace separate DeepSeek generation with the active session model. See [the session-model handoff plan](docs/plans/2026-10-04-handoff-session-model-suggestion.md).
+
+- [ ] Name the successor session. Add `--name "handoff: <goal>"` to the Pi arguments after `--` in `herdr agent start`, so `/resume` shows a readable name instead of the first prompt line.
+- [ ] Carry the thinking level over. Add `--thinking ${pi.getThinkingLevel()}` next to `--model` in `herdr agent start`. Remove "thinking-level carry-over" from the README's "Not supported" list.
+- [ ] Add timeouts to the `herdr` calls. `pi.exec` currently runs without a timeout, so a hung `herdr` blocks `/handoff` forever. Pass `{ timeout }` to `pi.exec`. Use a longer value for `agent start`, because it waits for Pi to start (other extensions use 10 s for most commands and up to 35 s for `agent start`).
+
+### To look into
+
+- [ ] Improve the generation prompt. Ideas from `@ssweens/pi-handoff`, `@tifan/pi-handoff`, and Matt Pocock's `handoff` skill: refer to existing plans, specs, and issues by path instead of copying them; remove secrets; keep exact file paths, function names, and error messages; use fixed sections (Goal, Constraints, Done, In progress, Decisions, Next steps); add a "Suggested skills" section. Not sure yet. Check that more structure does not make DeepSeek Flash output longer or less focused on the goal.
+- [ ] Build the file list from tool calls instead of letting the model guess. `@ssweens/pi-handoff` collects `path` from `read`, `edit`, and `write` tool calls in the projected messages (about 30 lines). Needs more investigation: a full list of read files can bring back the irrelevant context that the handoff is meant to remove. Options: list only modified files, or give the list to the generator as input and let it select the relevant ones.

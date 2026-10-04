@@ -16,7 +16,6 @@ Creates a symlink from `~/.pi/agent` to the `agent/` directory in this repo.
   - `settings.json`: agent settings (provider, model, thinking level, packages)
   - `extensions/`: TypeScript extensions that hook into the agent
   - `prompts/`: custom prompt templates
-  - `skills/`: custom skills
   - `bin/`: bundled binaries (e.g. `fd`)
   - `sessions/`: active session data
   - `todos/`: todo tracking
@@ -75,6 +74,8 @@ Prompt templates are Markdown snippets that expand into full prompts. Type `/nam
 
 Reusable, invokable capabilities. See [docs/skills.md](docs/skills.md).
 
+All Pi skills now live in `~/.agents/skills/`, shared with Claude. They are no longer stored in this repository's `agent/skills/` directory.
+
 ### Custom Skills
 
 - **commit-message** - Generates a commit message from staged changes (used by the pi-ai-commit wrapper script)
@@ -84,7 +85,7 @@ Reusable, invokable capabilities. See [docs/skills.md](docs/skills.md).
 
 ### Skill Locations
 
-- Global: `~/.pi/agent/skills/`, `~/.agents/skills/`
+- Global (shared): `~/.agents/skills/`
 - Project: `.pi/skills/`, `.agents/skills/` (searched up to git root)
 
 ### Skill Repositories

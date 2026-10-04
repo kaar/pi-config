@@ -1,13 +1,5 @@
 # TODO
 
-## Sharing Skills
-
-I currently have duplicated skills both in Claude & PI.
-
-Here I have skills under `~/.pi/agent/skills` and for Claude under `~/.claude/skills`
-
-It would be possible to also store all the skills under `~/.agents/skills/` so that Claude and PI can share them.
-
 ## Git worktree support
 
 Add command to /fork or /new a session into a worktree.

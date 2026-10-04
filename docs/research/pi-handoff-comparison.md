@@ -1,6 +1,6 @@
 # Pi handoff: alternatives, architectural differences, and improvement ideas
 
-**Research date:** 2026-10-04. **Scope:** Nine comparable extensions, skills, and protocols. **Status:** Research and proposals, not an implementation plan.
+**Research date:** 2026-10-04. **Scope:** Nine comparable extensions, skills, and protocols, plus a second pass over ten Pi handoff and pane-launch extensions (Section 3.10). **Status:** Research and proposals, not an implementation plan.
 
 ## Summary
 
@@ -15,6 +15,8 @@ The best improvements do not require a larger orchestration framework:
 5. Measure successor understanding, not only successful CLI calls.
 
 Keep the strongest existing properties: explicit submission, an unchanged source session, generation before pane creation, and no silent provider fallback.
+
+The second pass (Section 3.10) adds launch-side findings. No inspected extension chooses the split direction from the pane layout. They always split right, open a new tab, or take the direction from the user. Small gaps that others close: a successor session name, thinking-level carry-over, and timeouts on `herdr` calls.
 
 **Reading guide:** Sections 1–3 explain the current implementation and alternatives. Section 4 contains a prioritized checklist. Sections 5–8 cover architectural choices, evaluation, and cautions.
 
@@ -71,6 +73,8 @@ I ran `node --test agent/extensions/handoff/handoff.test.cjs`: **67 passed, zero
 | Destination editor | Always sends `ctrl+g` | Rebound or disabled external-editor bindings need manual action |
 | Launch result | Successful CLI calls, then a notification | Shortcut delivery does not prove editor startup or complete draft consumption |
 | Workspace | Both agents use the same directory | A fresh session is not an isolated worktree |
+| Process timeouts | `pi.exec` calls to `herdr` have no timeout | A hung `herdr` process blocks `/handoff` with no error |
+| Successor identity | No `--name`; agent name is `handoff-<base36 time>` | `/resume` shows the first prompt line, not the handoff goal |
 
 These are design boundaries, not all defects. In particular, strict fail-fast behavior and an unchanged source are deliberate choices. [L1–L3]
 
@@ -96,6 +100,11 @@ These are design boundaries, not all defects. In particular, strict fail-fast be
 | **jdmnk/context-checkpoint-skill** | Current agent; explicit checkpoint request | Updated `AGENT_CONTEXT.md` | User controls checkpoint creation | Bounded, current project state |
 | **Entire session-handoff** | Receiving agent retrieves stored transcripts | Entire CLI sessions and checkpoints | Continues unless an unanswered question blocks it | Recovery without a prepared handoff |
 | **Handover protocol and skills** | Structured continuity record and referenced evidence | JSON contract; separate service workflow | Workflow-specific permissions and review | Revision-aware records and continuity evaluation |
+| **@tifan/pi-handoff** | Active model; `handoff` skill text as policy | Temp Markdown file; new Herdr tab, focus unchanged | Prompt submitted on launch | Skill-defined policy, parent-linked child session, generated name |
+| **ogulcancelik/pi-handoff** | Source agent writes the prompt through a tool | Same-process `newSession` | Prompt submitted on launch | No separate generator; context guard at 90% |
+| **@ssweens/pi-handoff** | Active model; compaction-style sections | Same-process session; editor draft | Explicit Enter | File lists from tool calls; ancestry chain; compaction offer |
+| **pi-tmux-thread** | None; full context copy | `pi --fork` in a Herdr split or tab | Optional first prompt | Message picker for the fork point |
+| **@pi-kaush/pi-split-session** | Side agent writes the return handoff | Forked copy in a Herdr split; import back to main | Side prompt submitted; import is explicit | Reverse direction: side work returns a summary |
 
 ## 3. Detailed comparisons
 
@@ -226,6 +235,87 @@ The associated service test distinguishes three outcomes: connectivity, successf
 
 **Trade-off:** The full multi-user service, permissions, annotations, and revision workflow are excessive for a personal local extension. Borrow the separation and test principles, not the infrastructure.
 
+### 3.10 Second pass: Pi extensions that launch or name the successor
+
+The first pass concentrated on handoff content. This pass looked at Pi extensions with a focus on where the successor opens, how it is identified, and how it is linked to the source. Code was read for the first five entries. The last five are based on README or package descriptions only. [TF1, OC1, SW1, AW1, KS1, TS1, TB1, AM1, NN1, MP1]
+
+#### `@tifan/pi-handoff`: new Herdr tab and a skill as the policy
+
+**Observed behavior.** The extension requires a discoverable skill named `handoff` and puts its full text into the generator request as the document policy. The active model writes a Markdown document to `<tmpdir>/pi-handoffs/`. A small model generates a session name, prefixed with `[handoff] `. Inside Herdr, the extension creates the child session file with `SessionManager.create(cwd, undefined, { parentSession })`, then runs `herdr tab create --workspace $HERDR_WORKSPACE_ID --cwd <cwd> --label <name>` without `--focus`. It starts Pi in the tab's root pane with `--session <child file> --name <name> --provider --model`, and submits a short prompt with `herdr agent prompt`. That prompt only points to the document file. Outside Herdr, it falls back to `ctx.newSession()`. It retries `agent start` on `agent_pane_busy` (20 tries, 250 ms apart) and sets `pi.exec` timeouts (5 s for `tab create`, 35 s for `agent start`). The command is triggered by a `-handoff` marker in normal input. [TF1]
+
+**Difference from yours.** A new tab avoids all split-layout questions and keeps the source pane untouched. The successor is a linked child session with a readable name. The prompt is submitted, so there is no review gate.
+
+**Ideas to borrow:** A tab as an optional destination. Parent linking through the session header, with nothing added to the successor's context. `--name` for the successor. Exec timeouts. Keeping the generator policy in an editable skill file instead of a code constant.
+
+**Trade-offs:** Automatic submission and the retry loop conflict with your explicit-Enter and fail-fast policies. The file-pointer prompt makes the successor read a file before it can start.
+
+#### `ogulcancelik/pi-handoff` (Herdr's author): the source agent writes the handoff
+
+**Observed behavior.** `/handoff <focus>` sends a hidden message that tells the source agent to call a `handoff` tool with a complete prompt. The tool calls `ctx.newSession({ parentSession })` on the next tick and sends the prompt as a user message. The prompt starts with the parent session path and a hint to use `session_query` for missing details. A `turn_end` watcher asks to hand off at 90% context use. If the user does not answer in 60 seconds, it hands off automatically. A "No" answer is saved as a custom session entry, so the guard stays quiet after reload. [OC1]
+
+**Difference from yours.** There is no separate generator, no serialization, and no OpenRouter dependency. The source transcript gets an extra turn and a tool call. This is the simple form of item 18.
+
+**Ideas to borrow:** Persisting a declined nudge if item 19 is built. `session_query` as a narrow, pull-based way to reach parent details.
+
+**Trade-offs:** It changes the source transcript and costs a turn on the implementation model. The AFK auto-handoff removes the human gate.
+
+#### `@ssweens/pi-handoff`: compaction-aligned format and deterministic file lists
+
+**Observed behavior.** The generator prompt uses Pi's compaction sections: Goal, Constraints & Preferences, Progress (Done, In Progress, Blocked), Key Decisions, Next Steps, Critical Context. It tells the model not to continue the conversation and to keep exact paths, function names, and error messages. Code collects `path` arguments from `read`, `write`, and `edit` tool calls. The editor draft shows them as collapsed markers such as `[+12 read filenames]`. An `input` hook expands the markers to `<read-files>` and `<modified-files>` blocks on submit. The prompt starts with `/skill:pi-session-query` and the full parent and ancestor session chain, read from session headers. A `before_agent_start` hook adds a handoff hint to the system prompt. A `session_before_compact` hook offers a handoff instead of compaction. [SW1]
+
+**Difference from yours.** File lists come from code, not from the model. The draft stays short in the editor while the submitted message carries the full list.
+
+**Ideas to borrow:** Deterministic modified-file lists. The explicit "do not continue the conversation" rule for the generator.
+
+**Trade-offs:** A full read-file list can bring back context the handoff is meant to drop. A list of modified files only, or a list given to the generator to filter, fits the goal of a focused successor better. Collapsed markers depend on an `input` hook in the destination, which your separate-process design does not have.
+
+#### `pi-tmux-thread`: fork instead of summarize
+
+**Observed behavior.** `/herdr:split` and `/herdr:tab` start `pi --fork <session file>` in a new pane or tab. Splits always go right with `--focus`. Tabs use `tab create --workspace` with the workspace from `herdr pane current`. The command runs through `herdr pane run`, renames the pane, and uses `execFileSync` with a 10 s timeout. `--select` opens a picker to choose the last message to include. [AW1]
+
+**Difference from yours.** The successor gets the full conversation, not a summary. This is the opposite of a handoff when the goal is to drop irrelevant context.
+
+**Ideas to borrow:** Split or tab as an explicit argument, with a default.
+
+#### `@pi-kaush/pi-split-session`: side work that hands back
+
+**Observed behavior.** `/split` copies the session with `createBranchedSession` and starts it in a right-hand Herdr split. `/split-handoff` asks the side agent to write a final summary. `/split-import` imports only that summary into the main session. The Herdr launch splits with `--pane $HERDR_PANE_ID` instead of `--current`, adds `--env HERDR_AGENT=pi` and `--focus`, starts Pi with `agent start --timeout 10000`, and submits with `agent prompt`. Every `pi.exec` has a 10 s timeout. Failures record whether the copied session can be deleted: only when the failure happened before a pane could exist. The package was removed from the author's repository. Version 0.1.3 was inspected from npm. [KS1]
+
+**Difference from yours.** The flow returns context to the source instead of sending it away. The recovery rule matches your error boundary: before the split, nothing exists; after the split, report the pane.
+
+**Ideas to borrow:** An explicit `--pane` target. Exec timeouts. A "return handoff" from a successor back to the source, if that workflow becomes useful.
+
+#### README-only references
+
+- **`pi-sessions` (thurstonsand):** `/handoff --left|--right|--up|--down` opens the successor in a chosen split (tmux or Ghostty). A deferred mode creates the child session without starting it and copies the resume command. A `/handoff` board lists child sessions. [TS1]
+- **`pi-tmux-branch`:** one command and one shortcut per direction (`/tmux-branch-right`, `Ctrl+Shift+L`, and so on). It branches with `createBranchedSession` and runs `pi --session <file>`. [TB1]
+- **`pasky/pi-amplike`:** `/handoff -model <provider/id> -mode <name>` chooses the successor model. Without flags, it restores the source model and thinking level in the new session. [AM1]
+- **`@nicknisi/pi-handoff`:** appends a `Session History` list of parent session files, newest first, so the successor can open them with `pi --session`. [NN1]
+- **Matt Pocock's `handoff` skill:** write the handoff to the OS temp directory, add a "suggested skills" section, reference plans, specs, issues, and diffs by path instead of copying them, and redact secrets. [MP1]
+
+#### Successor placement: findings
+
+| Approach | Extensions | Cost |
+|---|---|---|
+| Always split right | yours, pi-split-session, pi-tmux-thread (split) | None |
+| New tab, focus unchanged | @tifan/pi-handoff, pi-tmux-thread (tab) | Successor not visible next to the source |
+| Direction chosen by the user | pi-sessions, pi-tmux-branch | Argument parsing or extra commands |
+| Direction chosen from the layout | none | Extra Herdr query, parsing, and failure path |
+
+The [split-direction plan](../plans/2026-10-02-handoff-split-direction.md) proposes the last row. No inspected extension does this. An optional `--tab` or `--down` argument, or a tab as the destination, solves the narrow-column problem with less code and no extra failure path.
+
+**About `--current`:** Herdr documents that `pane split --current` splits the pane named by the caller's `HERDR_PANE_ID`. The Pi process passes this variable to `herdr`, so the current code splits the source pane. The split-direction plan saw `pane neighbor --current` resolve the focused pane in Herdr 0.9.1. Nobody has seen this with `pane split`. `--pane $HERDR_PANE_ID` states the same target explicitly. It is optional hardening, not a fix.
+
+#### Lineage without context poisoning
+
+The second pass shows three ways to link the successor to the source:
+
+1. **Header only** (`parentSession` in the child session file, [TF1]). Nothing enters the successor's context. `/resume` and session tools can still show where it came from.
+2. **Path in the prompt** ([OC1, SW1, NN1]). The successor can open the source. Models tend to read files that a prompt names, which can bring back the large or unrelated context that the handoff removed.
+3. **Narrow query tool** (`session_query`, [OC1, SW1]). The successor asks one question and gets an answer, not the transcript.
+
+If the goal is a focused successor, prefer option 1. Add option 3 only if missing details become a real problem. Avoid option 2 or mark it clearly as a last resort.
+
 ## 4. Improvement checklist
 
 These are proposals inferred from the comparison. Effort estimates are relative: **small**, **medium**, or **large**. “First” means high value without changing the core workflow.
@@ -260,6 +350,18 @@ These are proposals inferred from the comparison. Effort estimates are relative:
 - [ ] **20. Add source-session recovery.** Accept an explicit source session and leaf when the original pane is unavailable. Reconstruct the projected branch and retrieve omitted evidence only on demand. **Effort: large.** Inspiration: [E1, P2].
 - [ ] **21. Add destination acknowledgement if transport becomes unreliable.** A destination helper can read a private record, set its own editor through Pi APIs, and acknowledge the draft hash. This requires a separate protocol; it is not an existing guarantee of Herdr CLI success. **Effort: large.** Inspiration: [V2].
 - [ ] **22. Add stable checkpoint references for repeated handoffs.** Keep durable decisions and canonical artifacts outside successive summaries. Carry links and evidence status forward without upgrading inherited claims. **Effort: medium–large.** Inspiration: [C1, U2].
+
+### Added from the second pass (Section 3.10)
+
+Items 23–25 are also tracked in the repository [TODO](../../TODO.md#handoff-extension). Items 26 and 27 are listed there as topics to investigate.
+
+- [ ] **23. Name the successor session.** Add `--name "handoff: <goal>"` to the Pi arguments in `herdr agent start`. **Effort: small.** Inspiration: [TF1].
+- [ ] **24. Carry the thinking level over.** Pi's CLI accepts `--thinking <level>`, so add `--thinking ${pi.getThinkingLevel()}` next to `--model`. This is the CLI-supported part of item 14. **Effort: small.** Inspiration: [AM1].
+- [ ] **25. Add timeouts to `herdr` calls.** `pi.exec` accepts `{ timeout }`. Use about 10 s for most commands and a longer value for `agent start`, which waits for Pi to start. **Effort: small.** Inspiration: [TF1, KS1, AW1].
+- [ ] **26. Tighten the generator prompt.** Tell the model not to continue the conversation. Keep exact paths, names, and errors. Reference artifacts by path. Add a "suggested skills" section. Consider fixed sections in the style of Pi's compaction format. Check that DeepSeek Flash output stays short and focused. Overlaps items 2 and 3. **Effort: small.** Inspiration: [SW1, MP1].
+- [ ] **27. Build the modified-file list in code.** Collect `path` from `write` and `edit` tool calls in the projected messages. Prefer modified files only, or pass a read-file list to the generator as filterable input, so the list does not undo context filtering. Related to item 5. **Effort: small.** Inspiration: [SW1].
+- [ ] **28. Replace the layout-aware split plan with a simpler placement option.** Keep "split right" as the default. If narrow columns are a real problem, add an optional `--tab` (new tab, focus unchanged) or `--down` argument. Optionally switch the split to `--pane $HERDR_PANE_ID`. **Effort: small.** Inspiration: [TF1, AW1, TS1, KS1].
+- [ ] **29. Link lineage through the session header only.** Create the child session with `parentSession` and start Pi with `--session`. Do not put the parent path in the prompt by default. See "Lineage without context poisoning" in Section 3.10. Refines item 4. **Effort: small–medium.** Inspiration: [TF1].
 
 **Suggested first selection:** 1, 2, 4, 6, 7, and 8. Add 5 and 15 if stale repository state is a recurring problem. Add 9 before broadening provider choice or persistence.
 
@@ -394,6 +496,11 @@ Run comparisons on the same source snapshot and goal. Separate cheap structural 
 - **Automatic instruction-file edits.** Handoff creation need not change project policy.
 - **Retrying side effects without identity.** Repeating a pane split can create duplicate successors. Prefer explicit recovery tied to a handoff and pane ID.
 - **Blindly preserving old decisions.** Record reasons and reconsideration conditions, not permanent prohibitions against new evidence.
+- **Layout heuristics for the split direction.** No inspected extension does this. A user-chosen option is simpler and more predictable. [Section 3.10]
+- **Retrying `agent start` on a busy pane.** [TF1] retries `agent_pane_busy`. This conflicts with your fail-fast policy and can hide a real conflict.
+- **`herdr agent prompt` for delivery.** It submits the prompt. Keep `pane send-text` so the draft stays unsubmitted.
+- **`pi --fork` as a handoff.** It copies the full conversation into the successor, which defeats the purpose of a focused handoff. [AW1, KS1]
+- **Parent session path in the prompt by default.** It invites the successor to reload the source context. Prefer header-only lineage. [OC1, SW1, NN1]
 
 ## 9. Sources and evidence limits
 
@@ -431,3 +538,21 @@ The [chronological source log](pi-handoff-comparison-sources.md) records discove
 - **[E1]** Entire, revision `fe5266f`: [session-handoff skill](https://github.com/entireio/skills/blob/fe5266f76d846222c73b080ce39fd803dd705198/skills/session-handoff/SKILL.md).
 - **[V1]** Handover, revision `b036340`: [Handoff Continuity Record](https://github.com/44-pixels/handover-mcp/blob/b036340342ee64c009231378dc1a288b820474c6/protocol/v1/README.md).
 - **[V2]** Same revision: [continuity-test skill](https://github.com/44-pixels/handover-mcp/blob/b036340342ee64c009231378dc1a288b820474c6/skills/handover-test-continuity/SKILL.md).
+
+### Second pass (Section 3.10)
+
+Code inspected:
+
+- **[TF1]** tifandotme, revision `50f6c4f`: [pi-handoff `src/index.ts`](https://github.com/tifandotme/pi-extensions/blob/50f6c4ff7fe4ea239467d2de298363bbbc8e012f/packages/pi-handoff/src/index.ts).
+- **[OC1]** ogulcancelik, revision `373a8cf`: [pi-handoff `handoff.ts`](https://github.com/ogulcancelik/pi-extensions/blob/373a8cf735e66792dae8b096bc62f8d5cf7693a8/packages/pi-handoff/handoff.ts). The older standalone repository `ogulcancelik/pi-handoff` now points here.
+- **[SW1]** ssweens, revision `f1e2af8`: [pi-handoff `extensions/handoff.ts`](https://github.com/ssweens/pi-packages/blob/f1e2af8353b3dbb4bdf931217c94872ff01543ef/pi-handoff/extensions/handoff.ts).
+- **[AW1]** aweis89, revision `d5eed82`: [pi-tmux-thread `extensions/tmux-thread.ts`](https://github.com/aweis89/pi-tmux-thread/blob/d5eed827cb1cc4905bded4dcfe24018d3b20b5f8/extensions/tmux-thread.ts).
+- **[KS1]** [`@pi-kaush/pi-split-session`](https://www.npmjs.com/package/@pi-kaush/pi-split-session) 0.1.3, `src/index.ts` from the npm tarball. The source is no longer in `kaushikgopal/pi-kaush` main.
+
+README or package description only:
+
+- **[TS1]** [thurstonsand/pi-sessions](https://github.com/thurstonsand/pi-sessions) and its [v0.2.0 release notes](https://github.com/thurstonsand/pi-sessions/releases/tag/v0.2.0).
+- **[TB1]** [pi-tmux-branch](https://pi.dev/packages/pi-tmux-branch).
+- **[AM1]** [pasky/pi-amplike `extensions/handoff.ts`](https://github.com/pasky/pi-amplike/blob/d7d4c49fa1e76cbbdbb24792b46590b7368d3117/extensions/handoff.ts), from search excerpts.
+- **[NN1]** [`@nicknisi/pi-handoff`](https://www.npmjs.com/package/@nicknisi/pi-handoff).
+- **[MP1]** Matt Pocock, [`handoff` skill](https://github.com/mattpocock/skills/blob/main/skills/productivity/handoff/SKILL.md), read from a local clone.

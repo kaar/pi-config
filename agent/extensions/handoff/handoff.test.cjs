@@ -85,6 +85,7 @@ function setup(options = {}) {
 		model: sourceModel,
 		waitForIdle: mock.fn(async () => { events.push("idle"); await options.idle?.(); }),
 		sessionManager: {
+			getSessionId: () => session.getSessionId(),
 			buildSessionProjection: mock.fn(() => {
 				events.push("projection");
 				return session.buildSessionProjection();
@@ -180,6 +181,12 @@ describe("handoff command", { timeout: 5000 }, () => {
 		assert.equal(typeof request.messages[0].timestamp, "number");
 		assert.equal(settings.cacheRetention, "none");
 		assert.equal(settings.sessionId, "isolated-generation-session");
+		assert.deepEqual(structuredClone(settings.headers), {
+			"HTTP-Referer": "https://github.com/kaar/pi-config",
+			"X-OpenRouter-Title": "pi-handoff",
+			"X-OpenRouter-Categories": "cli-agent",
+			"x-session-id": h.session.getSessionId(),
+		});
 		assert.equal(settings.signal, h.loaders[0].signal);
 		assert.equal(settings.signal.aborted, false);
 		assert.deepEqual(h.loaders.map(({ label }) => label), ["Generating handoff prompt..."]);

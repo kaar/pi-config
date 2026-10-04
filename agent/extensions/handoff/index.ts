@@ -76,6 +76,12 @@ async function createHandoffPrompt(
 			signal,
 			cacheRetention: "none",
 			sessionId: uuidv7(),
+			headers: {
+				"HTTP-Referer": "https://github.com/kaar/pi-config",
+				"X-OpenRouter-Title": "pi-handoff",
+				"X-OpenRouter-Categories": "cli-agent",
+				"x-session-id": ctx.sessionManager.getSessionId(),
+			},
 			onPayload: (payload: unknown) => ({
 				...(payload as Record<string, unknown>),
 				reasoning: { enabled: false },

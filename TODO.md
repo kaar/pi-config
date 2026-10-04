@@ -25,6 +25,12 @@ Example would be I have two different .worktrees with the different implementati
 
 ## Git guard
 
+- [ ] Add a user-controlled override to temporarily disable `agent/extensions/git-guard.ts` and enable it again. Keep git-guard enabled by default. Show clearly when it is disabled.
+
+Example: session `01a1014e-7b6e-70e3-b828-a8e210d0125d` involved recovery from a paused rebase in `herdr-config`. The user approved skipping a conflicting registry-only commit while preserving the local `plugins.json`. Git-guard blocked the backup, `git rebase --skip`, and restore command sequence with `Blocked: interactive git command`. The user then chose to run the commands manually. An explicit override can let the user authorize this recovery without removing the extension.
+
+Session log: `/Users/casparnettelbladt/.pi/agent/sessions/--Users-casparnettelbladt-GitHub-kaar-herdr-config--/2026-10-03T10-28-03-054Z_01a1014e-7b6e-70e3-b828-a8e210d0125d.jsonl`.
+
 ~~Git guard should not alert for a file that it has already touched this session.~~ Fixed: session-touched files are now tracked in a `Set` and bypassed on subsequent write/edit calls.
 
 ~~Still manages to do destructive git commands~~ Fixed: `git rm -f` / `git rm --force` added to `DESTRUCTIVE_GIT_PATTERNS`.

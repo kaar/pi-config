@@ -82,6 +82,7 @@ Reusable, invokable capabilities. See [docs/skills.md](docs/skills.md).
 ## Docs
 
 - [extensions.md](docs/extensions.md) - Extension authoring guide
+- [OpenRouter headers for Pi extensions](docs/openrouter-extension-headers.md) - App attribution, categories, session grouping, and visibility
 - [skills.md](docs/skills.md) - Skills authoring guide
 - [prompt-templates.md](docs/prompt-templates.md) - Prompt template syntax
 - [session.md](docs/session.md) - Session management

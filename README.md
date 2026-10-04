@@ -48,15 +48,28 @@ Interactive sub-agent management (experimental, under evaluation).
 - **git-guard** - Safety checks for destructive git operations
 - **git-checkpoint** - Automatic git-based checkpoints
 - **todos** - Todo management within sessions
+- **openrouter** - Account credits, current-key usage, app/model spending, and key budgets. See the commands below.
 - **handoff** - `/handoff <goal>` generates a continuation prompt with DeepSeek V4.1 Flash through OpenRouter, with reasoning disabled. It requires OpenRouter credentials. It transfers the draft without source review, focuses the new Herdr pane, and sends Pi's configured external-editor shortcut. Saving and closing returns to an unsubmitted draft. Press Enter in Pi to start work. The new Pi session uses the source implementation model. The source session is not changed. See [agent/extensions/handoff/README.md](agent/extensions/handoff/README.md).
 
+### OpenRouter usage commands
+
+| Command | Report |
+| --- | --- |
+| `/openrouter` | Account credits and current-key usage |
+| `/openrouter apps [days]` | Spending, requests, and tokens per app across the account |
+| `/openrouter models [days]` | Spending, requests, and tokens per model across the account |
+| `/openrouter keys` | Usage and budgets for keys in the default workspace, including disabled keys |
+| `/openrouter help` | Command syntax |
+
+Analytics default to seven rolling days and accept 1-30 days. Reports show at most 20 groups, sorted by spending. App groups use existing OpenRouter attribution. Requests without attribution appear as `Unknown`.
+
+Account credits and management reports require `OPENROUTER_MANAGEMENT_KEY`. Current-key usage requires `OPENROUTER_API_KEY`. Management calls only read data. A failed summary request does not hide the other summary report.
 
 ## Prompts
 
 Prompt templates are Markdown snippets that expand into full prompts. Type `/name` in the editor to invoke a template, where `name` is the filename without `.md`. See [docs/prompt-templates.md](docs/prompt-templates.md).
 
 - **review-staged** - Review staged git changes for bugs, security issues, and error handling gaps
-- **openrouter** - Show OpenRouter API-key usage and remaining account credits
 
 ## Skills
 

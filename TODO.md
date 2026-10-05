@@ -54,6 +54,12 @@ There are also some other extensions that are interesting like `pi-session-recal
 - https://github.com/ogulcancelik/agent-skills
 
 
+## /save extension
+
+- [ ] Replace the `/save` prompt (`agent/prompts/save.md`) with a Pi extension command. Like the built-in `/copy`, it must take the last assistant message, but write it to a Markdown file instead of the clipboard. Save the message as-is, without calling the model, summarizing, rewriting, or choosing which parts to keep.
+
+Decide how the user selects the file path and how the command handles an existing file. Show the saved path on success and a clear error when there is no message to save.
+
 ## /recap
 
 I would like a similar skill in Pi as clauds recap feature

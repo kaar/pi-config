@@ -9,6 +9,24 @@ The new PI inside the worktree is going to be opened as a split pane in tmux.
 For merging changes from a worktree back into the main branch, see
 [WORKTREE_MERGE_WORKFLOW.md](./WORKTREE_MERGE_WORKFLOW.md).
 
+## Split a Pi session into a Herdr pane
+
+- [ ] Add a command, similar to `/handoff` or `/fork`, that continues the current Pi session in a new Herdr split pane. Leave the original Pi session open and free to use.
+
+The new pane must receive the context needed to continue the current task. Both sessions must then run independently. Continuing or navigating one session must not change the other session's history.
+
+In the original pane, I can continue the conversation or use `/tree` to return to an earlier point and start another line of work. I also want to create another Git worktree from there while the split session continues its task.
+
+Decide the command name and whether it copies the full session history or uses a handoff summary. This is a session split, not a replacement that closes the original pane. Keep it separate from creating a Git worktree, but let the two features work together.
+
+- [ ] Before implementing, investigate established patterns and existing extensions for this workflow. Compare Pi's built-in session branching and the local `agent/extensions/handoff/` with external options. Determine what can be reused or adapted for Herdr while keeping both sessions independent.
+
+Initial search candidates, not yet verified against their source code:
+
+- [`split-fork` in Fatih0234/my-pi](https://github.com/Fatih0234/my-pi).
+- [`pi-mux`](https://github.com/leohenon/pi-mux).
+- [`@tifan/pi-handoff`](https://pi.dev/packages/%40tifan/pi-handoff) and [`@ssweens/pi-handoff`](https://pi.dev/packages/%40ssweens/pi-handoff).
+
 ## Compare implementations
 
 When I do multiple implementations from the same SPEC I would like a good way to compare the two.
@@ -28,6 +46,49 @@ Session log: `/Users/casparnettelbladt/.pi/agent/sessions/--Users-casparnettelbl
 ~~Still manages to do destructive git commands~~ Fixed: `git rm -f` / `git rm --force` added to `DESTRUCTIVE_GIT_PATTERNS`.
 
 Investigate why the git guard blocks `GIT_EDITOR=true git rebase --continue && git status --short --branch && git log --oneline -3` as interactive, and fix it if the classification is incorrect.
+
+## Standardize capturing session ideas in TODO.md
+
+- [ ] Turn the workflow used in this session into a reusable way to add ideas and follow-up tasks to a project's `TODO.md`. Decide whether this needs an extension, a skill, a prompt template, or another approach.
+
+I want to discuss an idea in Pi, then ask to save it for later without starting implementation or research. Capture enough conversation context that I can return to the task in another session.
+
+Create `TODO.md` if it does not exist. Otherwise, preserve existing content and add a clear heading and an unchecked task. Record the intent, constraints, relevant paths or links, and open questions without inventing requirements.
+
+When I add details, update the related entry instead of creating duplicates. Keep requests to investigate existing solutions as follow-up tasks unless I explicitly ask to run the investigation now. Confirm the file and section updated.
+
+Research: [existing TODO capture workflows](docs/research/pi-todo-capture.md). The closest match is [lucaspimentel's `add-todo` skill](https://github.com/lucaspimentel/agent-skills/blob/main/skills/add-todo/SKILL.md). Use it as a reference for a skill or prompt before building an extension. Adapt its research default and duplicate handling to the save-only, update-existing-entry workflow above.
+
+`pi-todo-md` and `@soleone/pi-tasks` are extension candidates, but their writers do not preserve all free-form content in the current `TODO.md`. Test on disposable copies before considering adoption.
+
+## Local reference for the running Pi version
+
+- [ ] Add a discoverable local reference to Pi's bundled documentation without copying it. Keep the reference tied to the running version, not the latest upstream docs.
+
+Recommended solution: create a version-specific symlink at `.local/pi/1.0.4` to `agent/install/releases/1.0.4/node_modules/@earendil-works/pi-coding-agent/`. Link the package directory, not only `docs/`, so `README.md`, `docs/`, and `examples/` remain together. This preserves relative links between the documentation and examples.
+
+From `.local/pi/`, the relative symlink target is `../../agent/install/releases/1.0.4/node_modules/@earendil-works/pi-coding-agent`. Read the docs through `.local/pi/1.0.4/docs/`. The installed package reports version `1.0.4`, matching this session's documentation reference and the [upstream v1.0.4 docs](https://github.com/earendil-works/pi/tree/v1.0.4/packages/coding-agent/docs).
+
+- Add `.local/pi/` to Git ignore rules before creating the reference. It is machine-local and is not currently ignored.
+- Treat the linked package as read-only. Editing through the symlink changes the installed Pi files.
+- For each new Pi version, create a separate version-specific link. Use the package path in the running session's system prompt to select its docs.
+- Do not use `agent/install/current-version` as proof of an existing session's version. The launcher reads it for new processes, but an older session can remain running after an update.
+- Handle missing targets explicitly if an old release is removed. Only keep a separate tagged checkout if documentation must remain available after that installation is gone.
+
+Pi already references its installed docs in the system prompt, so no prompt change or docs-reading extension is needed. The symlink is only a convenient local entry point.
+
+## Storage of AI-generated documentation
+
+- [ ] Extend the global rules for storing AI-generated documentation. Use [Herdr](https://github.com/herdrdev/herdr) and its `## Docs` rules as a reference, not as a layout to copy into every project.
+
+Define which documents stay local, which belong in Git, and when a draft becomes maintained project documentation. Keep project-specific release rules separate from the global defaults.
+
+- Consider ignored `.local/prd/` for local planning notes, product requirements documents (PRDs), and exploratory specs.
+- Decide when research and implementation plans belong in committed `docs/research/` and `docs/plans/`, rather than `.local/`.
+- Separate unreleased documentation from published documentation where a project needs this distinction. Herdr uses `docs/next/`, CI-owned `docs/preview/website/`, and maintained `docs/versions/`.
+- Define who can update each location. Agents must not manually edit CI-owned snapshots or replace published documentation with current drafts.
+- Keep release curation separate from normal feature work. Herdr prepares changelog entries during stable release review instead of editing a shared changelog on every branch.
+- Update the global agent instructions and document-writing skills to use the agreed defaults. Preserve repository-specific rules and decide how to handle existing files before moving them.
 
 ## Formatting of design spec markdowns
 

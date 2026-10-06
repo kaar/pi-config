@@ -1,6 +1,6 @@
 # Codemode and Jev
 
-Reference notes for Pi's `codemode` tool and TypeSafe's Jev classifier model. Checked against Pi 0.99.1 and [pi.dev/docs/latest](https://pi.dev/docs/latest) on 2026-09-30.
+Reference notes for Pi's `codemode` tool and TypeSafe's Jev classifier model. Jev details checked on 2026-09-30. Codemode and pi-web-access details updated on 2026-10-06 against Pi 1.0.4 and pi-web-access 0.36.0.
 
 ## Summary
 
@@ -12,12 +12,14 @@ Reference notes for Pi's `codemode` tool and TypeSafe's Jev classifier model. Ch
 
 ### What it does
 
-Codemode scripts run in a QuickJS sandbox. The sandbox can only reach Pi's tools, through `tools.<name>(args)`. The main benefits:
+Codemode scripts run in a QuickJS sandbox, an isolated JavaScript engine. It has no Node APIs, direct network access, file system, or timers. Scripts reach external resources through `tools.<name>(args)` and `models`. The main benefits:
 
 - Run several tool calls in parallel, for example with `Promise.allSettled`.
 - Filter large output in the script, so the model sees only the part it needs.
 - Call MCP tools that are not declared to the model.
 - Call classifier models such as Jev.
+
+Filtering results uses ordinary JavaScript, not another model. A called tool can still use a model internally. For example, pi-web-access's `fetch_content({ url, mode: "answer", prompt })` asks a chat model about fetched content. That model receives the question and source text, not the session conversation. This generates an answer, not an independent correctness check.
 
 ### Enable it
 
@@ -43,16 +45,20 @@ pi --tools read,bash,edit,write,codemode
 | `text(value)`, `console.*`, top-level `return` | Send output to the model |
 | `image(dataUrlOrImageContent)` | Send an image to the model |
 | `exit()` | End the script early |
-| `searchTools(query, { limit, namespace })`, `describeTool(name)` | Find tools that are not listed in the tool description (BM25 ranking) |
+| `searchTools(query, { limit, namespace })`, `describeTool(name)`, `describeNamespace(name)` | Find tools and inspect tools or namespaces (BM25 word-based ranking, not model judgment) |
 | `store(key, value)`, `load(key)` | Keep JSON values across `codemode` calls. Values are saved in the session and follow the session branch |
 | `models.getModelsOfType`, `getAvailableOfType`, `getModelOfType` | List the model catalog |
-| `models.classify(model, context)` | Run a classifier model with the session credentials. Maximum 4 at a time per script |
+| `models.classify(model, context)`, `models.generateImages(model, context)` | Run classifier or image models with session credentials. Maximum 4 combined calls at a time per script. Further calls queue |
+
+Chat models appear in the catalog, but scripts cannot run them directly through `models`.
 
 Result types:
 
 - `bash` returns `{ output, truncated, full_output_path?, exit_code, wall_time_seconds }`, also for a non-zero exit code. `output` holds up to 1 MiB, which is much more than the 2000 lines or 50KB that the model sees from a direct call.
-- MCP tools return their full `CallToolResult`.
-- Other tools return their text output.
+- MCP tools return their full `CallToolResult`, including `isError` and `structuredContent`.
+- Tools with an output schema return structured data. `read` returns text or an image block; other tools without a schema return text.
+
+Failed or blocked tool calls can reject. `Promise.allSettled()` keeps successful results, but inspect the shell result's `exit_code` and MCP `isError` even when a promise resolves.
 
 An optional first line sets limits:
 
@@ -60,7 +66,7 @@ An optional first line sets limits:
 // @options: {"max_output_tokens": 2000, "timeout_ms": 60000}
 ```
 
-`max_output_tokens` defaults to 10000. Longer output keeps its start and end, and the full text goes to a temp file. `timeout_ms` has no default.
+`max_output_tokens` defaults to 10000 and limits script output, not a separate model's response. Longer output keeps its start and end, and the full text goes to a temp file. `timeout_ms` has no default. Await tool calls: calls still running when the script ends are cancelled.
 
 ### Settings
 
@@ -77,11 +83,12 @@ Each MCP server (and each tool, with `toolExposure`) has an `exposure` value. Se
 
 | Exposure | Declared to model | Listed in `codemode` description | Reached through |
 |---|---|---|---|
-| `codemode` (default) | No | Yes (within budget) | Codemode scripts |
-| `codemode-deferred` | No | Server name and tool count only | Codemode scripts, `searchTools()` |
-| `deferred` | Only after `tool_search` loads it | No | `tool_search`, then a direct call |
-| `direct` | Yes | Yes | Direct call or codemode |
+| `codemode` (default) | No | No | Codemode scripts, `searchTools()` |
+| `deferred` | Only after `tool_search` loads it | No | `tool_search`, then a direct call, or codemode |
+| `direct` | Yes | In `only` mode | Direct call or codemode |
 | `hidden` | No | No | Cannot be called |
+
+`codemode-deferred` is now an alias for `codemode`. Both `codemode` and `deferred` tools support script calls and discovery through `tool_search`.
 
 Tool calls from codemode scripts go through the normal tool pipeline, so `tool_call` and `tool_result` handlers (for example `git-guard`) still apply. These calls have the `codemode` call's id as `parentToolCallId`.
 
@@ -101,7 +108,7 @@ Jev returns calibrated probabilities for each question. Your code decides what t
 | Pi type | TypeSafe name | `criteria` | Answer |
 |---|---|---|---|
 | `choice` | Choice | Object of option to description, up to 255 options | `{ choice, probabilities, confidence }` |
-| `score` | Score | Array of ordered level descriptions, lowest first | `{ score, confidence }` |
+| `score` | Score | Array of ordered level descriptions, lowest first | `{ score, confidence }` (expected level index, can be fractional) |
 | `bool` | Noul | `{ true: "...", false: "..." }` | `{ probability }` (probability of true, no confidence) |
 
 Every question also has `instructions`. Check `result.stopReason === "stop"` before you use `result.answers`. The other values are `"error"` (with `errorMessage`) and `"aborted"`.
@@ -130,7 +137,7 @@ Or store it in `agent/auth.json` (Git-ignored), and read it from the macOS Keych
 
 This setup already has OpenRouter credentials, so `openrouter` / `typesafe/jev-1.13` works without a TypeSafe key.
 
-TypeSafe's direct `jev-latest` has no catalog price in Pi, so its tokens show as no cost in `/session`. OpenRouter calls use the catalog price.
+Pi includes direct classifier usage in session totals. TypeSafe's direct `jev-latest` has no catalog price in Pi, so its tokens show as no cost in `/session`. OpenRouter calls use the catalog price.
 
 ### Limits
 
@@ -161,6 +168,7 @@ const result = await models.classify(jev, {
     },
   },
 });
+if (result.stopReason !== "stop") return result.errorMessage ?? result.stopReason;
 return result.answers;
 ```
 
@@ -207,12 +215,15 @@ labels with what agent/extensions/git-guard.ts decides, and list only the disagr
 
 ## Cautions
 
+- The sandbox restricts JavaScript, not tool permissions. `tools.bash()` retains its execution environment's permissions. A failed script does not undo completed tool actions.
 - Jev confidence is not proof of correctness. Keep permissions and irreversible actions in deterministic code, such as `git-guard`.
 - Every classify call sends the `state` to the provider. Do not put secrets in it.
 - Jev has known weak spots. See TypeSafe's [jev-1.13 jaggedness](https://docs.typesafe.ai/model-jaggedness/jev-1.13.md) page.
 
 ## Sources
 
+- [Pi Codemode: API and limits](https://pi.dev/docs/latest/codemode)
+- [Pi Web Access: fetching and answer mode](https://github.com/nicobailon/pi-web-access#fetch_content). [Inspected answer implementation](https://github.com/nicobailon/pi-web-access/blob/9c9c0a8f1c452e6fdcf3cb43040f46e070534de1/page-query.ts)
 - [Pi CLI: Enable codemode](https://pi.dev/docs/latest/cli#enable-codemode). Local copy: `/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/docs/cli.md`
 - [Pi models: Use classifier models](https://pi.dev/docs/latest/models#use-classifier-models)
 - [Pi MCP: Exposure](https://pi.dev/docs/latest/mcp#control-tool-exposure)

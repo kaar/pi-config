@@ -14,6 +14,14 @@ The skill is a good fit when a local browser, JavaScript rendering, no API key, 
 
 Do not run the two approaches as a blind A/B test. While the extension is installed, the agent may choose its native `web_search` tool instead of loading the skill. Use `/skill:web-search <query>` to force the skill during the initial test. Remove the extension and restart Pi only for the replacement test.
 
+## Codemode and the CLI choice
+
+Armin Ronacher's [What is Codemode](https://lucumr.pocoo.org/2026/10/6/codemode/) (October 6, 2026) explains why CLI workflows and native tools can coexist. Codemode coordinates calls inside Pi, while bash combines programs in the execution environment. Codemode does not reverse his earlier recommendation to use command-line programs.
+
+A browser skill remains useful for local browser access. Native web tools also let codemode combine calls, inspect structured results, and filter output before the main model sees it. A codemode script can call the browser CLI through `tools.bash()`, but it still depends on that execution environment's browser and network access. The script itself has no direct network or file-system access.
+
+This distinction does not select a winner for the replacement trial. Compare retrieval capabilities and dependencies as well as the tool interface. For batches, inspect a small sample and make sure that larger results keep the same structure. See [Codemode and Jev](codemode-and-jev.md) for architecture, MCP guidance, and saved-state limits. See [answer-mode research](research/fetch-content-answer-mode.md) for the separate model request made by `mode: "answer"`.
+
 ## 1. Install and test the skill
 
 ### Prerequisites

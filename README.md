@@ -100,7 +100,7 @@ All Pi skills now live in `~/.agents/skills/`, shared with Claude. They are no l
 - [skills.md](docs/skills.md) - Skills authoring guide
 - [prompt-templates.md](docs/prompt-templates.md) - Prompt template syntax
 - [session.md](docs/session.md) - Session management
-- [codemode-and-jev.md](docs/codemode-and-jev.md) - Codemode tool and Jev classifier model
+- [codemode-and-jev.md](docs/codemode-and-jev.md) - Codemode architecture, tool workflows, MCP guidance, and Jev classifier model
 
 ## Troubleshooting
 
@@ -117,6 +117,7 @@ Notes:
 
 ## Resources
 
+- Armin Ronacher, [What is Codemode](https://lucumr.pocoo.org/2026/10/6/codemode/) (October 6, 2026)
 - [PI](https://pi.dev/)
 - [Pi Mono - Coding Agent](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/)
 - [Extensions docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md)

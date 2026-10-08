@@ -20,6 +20,7 @@ Creates a symlink from `~/.pi/agent` to the `agent/` directory in this repo.
   - `sessions/`: active session data
   - `todos/`: todo tracking
 - `docs/`: documentation
+- `.agents/docs/`: AI plans, research, and implementation designs
 - `AGENTS.md`: guidelines for parallel agents (tool usage, git safety rules, writing style)
 - `install.sh`: symlink setup script
 

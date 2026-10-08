@@ -3,7 +3,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 type HerdrResult<T> = { result: T };
 type Pane = HerdrResult<{ pane: { pane_id: string; workspace_id: string } }>;
 type Tab = HerdrResult<{ root_pane: { pane_id: string }; tab: { tab_id: string } }>;
-type Agent = HerdrResult<{ agent: { pane_id: string } }>;
 
 interface Destination {
 	paneId: string;

@@ -155,62 +155,6 @@ export default function (pi: ExtensionAPI) {
 		return resolvedSsh;
 	};
 
-	pi.registerTool({
-		...localRead,
-		async execute(id, params, signal, onUpdate, _ctx) {
-			const ssh = getSsh();
-			if (ssh) {
-				const tool = createReadTool(localCwd, {
-					operations: createRemoteReadOps(ssh.remote, ssh.remoteCwd, localCwd),
-				});
-				return tool.execute(id, params, signal, onUpdate);
-			}
-			return localRead.execute(id, params, signal, onUpdate);
-		},
-	});
-
-	pi.registerTool({
-		...localWrite,
-		async execute(id, params, signal, onUpdate, _ctx) {
-			const ssh = getSsh();
-			if (ssh) {
-				const tool = createWriteTool(localCwd, {
-					operations: createRemoteWriteOps(ssh.remote, ssh.remoteCwd, localCwd),
-				});
-				return tool.execute(id, params, signal, onUpdate);
-			}
-			return localWrite.execute(id, params, signal, onUpdate);
-		},
-	});
-
-	pi.registerTool({
-		...localEdit,
-		async execute(id, params, signal, onUpdate, _ctx) {
-			const ssh = getSsh();
-			if (ssh) {
-				const tool = createEditTool(localCwd, {
-					operations: createRemoteEditOps(ssh.remote, ssh.remoteCwd, localCwd),
-				});
-				return tool.execute(id, params, signal, onUpdate);
-			}
-			return localEdit.execute(id, params, signal, onUpdate);
-		},
-	});
-
-	pi.registerTool({
-		...localBash,
-		async execute(id, params, signal, onUpdate, _ctx) {
-			const ssh = getSsh();
-			if (ssh) {
-				const tool = createBashTool(localCwd, {
-					operations: createRemoteBashOps(ssh.remote, ssh.remoteCwd, localCwd),
-				});
-				return tool.execute(id, params, signal, onUpdate);
-			}
-			return localBash.execute(id, params, signal, onUpdate);
-		},
-	});
-
 	pi.on("session_start", async (_event, ctx) => {
 		// Resolve SSH config now that CLI flags are available
 		const arg = pi.getFlag("tailnet") as string | undefined;
@@ -220,6 +164,64 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.setStatus("tailnet", undefined);
 			return;
 		}
+
+		// Keep Pi's tools untouched unless remote execution was explicitly requested.
+		// Install overrides before checking SSH so connection failures cannot run locally.
+		pi.registerTool({
+			...localRead,
+			async execute(id, params, signal, onUpdate, _ctx) {
+				const ssh = getSsh();
+				if (ssh) {
+					const tool = createReadTool(localCwd, {
+						operations: createRemoteReadOps(ssh.remote, ssh.remoteCwd, localCwd),
+					});
+					return tool.execute(id, params, signal, onUpdate);
+				}
+				return localRead.execute(id, params, signal, onUpdate);
+			},
+		});
+
+		pi.registerTool({
+			...localWrite,
+			async execute(id, params, signal, onUpdate, _ctx) {
+				const ssh = getSsh();
+				if (ssh) {
+					const tool = createWriteTool(localCwd, {
+						operations: createRemoteWriteOps(ssh.remote, ssh.remoteCwd, localCwd),
+					});
+					return tool.execute(id, params, signal, onUpdate);
+				}
+				return localWrite.execute(id, params, signal, onUpdate);
+			},
+		});
+
+		pi.registerTool({
+			...localEdit,
+			async execute(id, params, signal, onUpdate, _ctx) {
+				const ssh = getSsh();
+				if (ssh) {
+					const tool = createEditTool(localCwd, {
+						operations: createRemoteEditOps(ssh.remote, ssh.remoteCwd, localCwd),
+					});
+					return tool.execute(id, params, signal, onUpdate);
+				}
+				return localEdit.execute(id, params, signal, onUpdate);
+			},
+		});
+
+		pi.registerTool({
+			...localBash,
+			async execute(id, params, signal, onUpdate, _ctx) {
+				const ssh = getSsh();
+				if (ssh) {
+					const tool = createBashTool(localCwd, {
+						operations: createRemoteBashOps(ssh.remote, ssh.remoteCwd, localCwd),
+					});
+					return tool.execute(id, params, signal, onUpdate);
+				}
+				return localBash.execute(id, params, signal, onUpdate);
+			},
+		});
 
 		ctx.ui.setStatus("tailnet", ctx.ui.theme.fg("warning", `Tailnet checking: ${arg}`));
 		try {

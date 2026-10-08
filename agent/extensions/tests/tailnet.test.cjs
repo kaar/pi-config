@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
+const { pathToFileURL } = require("node:url");
 const { test } = require("node:test");
 const { runInNewContext } = require("node:vm");
 const ts = require("../node_modules/typescript");
@@ -12,7 +13,7 @@ const compiled = ts.transpileModule(source, {
 	compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
-function harness(flag) {
+function harness(flag, { bashFactory } = {}) {
 	const handlers = new Map();
 	const tools = new Map();
 	const statuses = [];
@@ -20,18 +21,24 @@ function harness(flag) {
 	const children = [];
 	const timers = new Set();
 	const executions = [];
+	const registrations = [];
+	let flagsAvailable = false;
 	const createTool = (name) => (_cwd, options) => ({
 		name,
-		async execute() {
+		async execute(...args) {
 			const backend = options ? "remote" : "local";
-			executions.push({ name, backend });
+			executions.push({ name, backend, args });
 			return { backend, operations: options?.operations };
 		},
 	});
+	const builtins = new Map(["read", "write", "edit", "bash"].map(name => [
+		name, (name === "bash" && bashFactory ? bashFactory : createTool(name))(process.cwd()),
+	]));
+	for (const [name, tool] of builtins) tools.set(name, tool);
 	const api = {
 		registerFlag() {},
-		getFlag: () => flag,
-		registerTool: (tool) => tools.set(tool.name, tool),
+		getFlag: () => flagsAvailable ? flag : undefined,
+		registerTool: (tool) => { registrations.push(tool.name); tools.set(tool.name, tool); },
 		on: (name, handler) => handlers.set(name, handler),
 	};
 	const ctx = {
@@ -85,15 +92,16 @@ function harness(flag) {
 	});
 	exports.default(api);
 	return {
-		handlers, tools, statuses, notifications, children, timers, executions,
-		start: () => handlers.get("session_start")({}, ctx),
-		setFlag: (value) => { flag = value; },
+		handlers, tools, builtins, registrations, statuses, notifications, children, timers, executions,
+		start: () => { flagsAvailable = true; return handlers.get("session_start")({}, ctx); },
 	};
 }
 
 async function assertBlocked(h, pattern) {
 	const executions = h.executions.length;
 	const children = h.children.length;
+	assert.deepEqual([...h.tools.keys()], ["read", "write", "edit", "bash"]);
+	assert.equal(h.registrations.length >= 4, true);
 	for (const tool of h.tools.values()) {
 		await assert.rejects(tool.execute("id", {}), pattern);
 	}
@@ -107,9 +115,13 @@ async function assertBlocked(h, pattern) {
 	assert.equal(h.children.length, children);
 }
 
-test("without --tailnet, tools and user commands retain local behavior", async () => {
+test("without --tailnet, no tool overrides are registered at startup or reload", async () => {
 	const h = harness(undefined);
+	assert.equal(h.registrations.length, 0);
 	await h.start();
+	await h.start();
+	assert.equal(h.registrations.length, 0);
+	for (const [name, builtin] of h.builtins) assert.equal(h.tools.get(name), builtin);
 	assert.equal(h.children.length, 0);
 	assert.equal(h.statuses.at(-1).text, undefined);
 	for (const tool of h.tools.values()) assert.equal((await tool.execute()).backend, "local");
@@ -125,8 +137,9 @@ for (const [target, command, cwd] of [
 ]) {
 	test(`validates ${target} before enabling remote tools`, async () => {
 		const h = harness(target);
-		await assertBlocked(h, /not ready/);
+		assert.equal(h.registrations.length, 0);
 		const started = h.start();
+		assert.deepEqual(h.registrations, ["read", "write", "edit", "bash"]);
 		assert.equal(h.statuses.at(-1).text, `warning:Tailnet checking: ${target}`);
 		await assertBlocked(h, /not ready/);
 		assert.equal(h.children[0].command, "tailscale");
@@ -225,11 +238,11 @@ test("session startup clears stale success and permits recovery after a failed c
 	h.children.at(-1).finish(0, "/root\n");
 	await started;
 	assert.equal((await h.tools.get("write").execute()).backend, "remote");
-	h.setFlag(undefined);
-	await h.start();
-	assert.equal((await h.tools.get("write").execute()).backend, "local");
-	assert.equal(h.statuses.at(-1).text, undefined);
-	assert.equal(await h.handlers.get("before_agent_start")({ systemPrompt: "original" }), undefined);
+	// Reloading without a CLI target creates a fresh extension runtime.
+	const local = harness(undefined);
+	await local.start();
+	assert.equal(local.registrations.length, 0);
+	assert.equal(local.tools.get("write"), local.builtins.get("write"));
 });
 
 for (const target of ["", ":/root", "user@host:", "-invalid"]) {
@@ -249,4 +262,65 @@ test("empty or non-absolute pwd output is rejected", async () => {
 		await started;
 		await assertBlocked(h, /absolute working directory/);
 	}
+});
+
+const sessionKeys = ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL"];
+const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+const metadataCommand = `${shellQuote(process.execPath)} -e ${shellQuote(
+	`console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(sessionKeys)}.map(key => [key, process.env[key] ?? null]))))`,
+)}`;
+const piModule = (path) => import(pathToFileURL(join(
+	__dirname, "../node_modules/@earendil-works/pi-coding-agent/dist", path,
+)).href);
+const bashFactory = async () => (await piModule("core/tools/bash.js")).createBashToolDefinition;
+
+function sessionContext(id = "session-one", file = "/sessions/one.jsonl", model = { provider: "provider-one", id: "model-one" }, thinkingLevel = "high") {
+	return {
+		cwd: process.cwd(),
+		sessionManager: { getSessionId: () => id, getSessionFile: () => file, getBranch: () => [] },
+		model,
+		thinkingLevel,
+	};
+}
+
+function expectedMetadata(ctx) {
+	return {
+		PI_SESSION_ID: ctx.sessionManager.getSessionId(),
+		PI_SESSION_FILE: ctx.sessionManager.getSessionFile() ?? null,
+		PI_PROVIDER: ctx.model?.provider ?? null,
+		PI_MODEL: ctx.model?.id ?? null,
+		PI_REASONING_LEVEL: ctx.thinkingLevel ?? null,
+	};
+}
+
+test("real local Bash exposes current session, model, and ephemeral metadata", async () => {
+	const h = harness(undefined, { bashFactory: await bashFactory() });
+	await h.start();
+	for (const ctx of [
+		sessionContext(),
+		sessionContext("session-two", null, { provider: "provider-two", id: "model-two" }, "off"),
+	]) {
+		const result = await h.tools.get("bash").execute("id", { command: metadataCommand }, undefined, undefined, ctx);
+		assert.equal(result.structuredContent.exit_code, 0);
+		assert.deepEqual(JSON.parse(result.structuredContent.output), expectedMetadata(ctx));
+	}
+});
+
+test("real codemode Bash call retains session context and structured output", async () => {
+	const h = harness(undefined, { bashFactory: await bashFactory() });
+	await h.start();
+	const bash = h.tools.get("bash");
+	const ctx = sessionContext();
+	ctx.tools = [bash];
+	ctx.executeTool = async (name, params, { signal }) => {
+		assert.equal(name, "bash");
+		const result = await bash.execute("codemode/1", params, signal, undefined, ctx);
+		return { toolCall: { id: "codemode/1" }, result, isError: !!result.isError };
+	};
+	const { createCodemodeToolDefinition } = await piModule("extensions/codemode/tool.js");
+	const result = await createCodemodeToolDefinition().execute("codemode", {
+		code: `return (await tools.bash({ command: ${JSON.stringify(metadataCommand)} })).output;`,
+	}, undefined, undefined, ctx);
+	assert.equal(result.isError, undefined);
+	assert.deepEqual(JSON.parse(result.content.at(-1).text), expectedMetadata(ctx));
 });

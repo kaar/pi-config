@@ -4,7 +4,7 @@ This repository currently loads [`pi-web-access`](https://www.npmjs.com/package/
 
 There is a browser-based alternative: [`web-search`](https://github.com/ogulcancelik/agent-skills/tree/main/skills/web-search), an Agent Skill maintained by ogulcancelik. It replaces the deprecated [`pi-web-browse`](https://github.com/ogulcancelik/pi-extensions/tree/main/packages/pi-web-browse) extension. It does not replace every `pi-web-access` capability.
 
-See [the replacement research](research/web-search-skill-replacement.md) for the evidence, comparison, and sources.
+See [the replacement research](../.agents/docs/research/web-search-skill-replacement.md) for the evidence, comparison, and sources.
 
 ## Recommendation
 
@@ -20,7 +20,7 @@ Armin Ronacher's [What is Codemode](https://lucumr.pocoo.org/2026/10/6/codemode/
 
 A browser skill remains useful for local browser access. Native web tools also let codemode combine calls, inspect structured results, and filter output before the main model sees it. A codemode script can call the browser CLI through `tools.bash()`, but it still depends on that execution environment's browser and network access. The script itself has no direct network or file-system access.
 
-This distinction does not select a winner for the replacement trial. Compare retrieval capabilities and dependencies as well as the tool interface. For batches, inspect a small sample and make sure that larger results keep the same structure. See [Codemode and Jev](codemode-and-jev.md) for architecture, MCP guidance, and saved-state limits. See [answer-mode research](research/fetch-content-answer-mode.md) for the separate model request made by `mode: "answer"`.
+This distinction does not select a winner for the replacement trial. Compare retrieval capabilities and dependencies as well as the tool interface. For batches, inspect a small sample and make sure that larger results keep the same structure. See [Codemode and Jev](codemode-and-jev.md) for architecture, MCP guidance, and saved-state limits. See [answer-mode research](../.agents/docs/research/fetch-content-answer-mode.md) for the separate model request made by `mode: "answer"`.
 
 ## 1. Install and test the skill
 

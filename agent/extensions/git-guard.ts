@@ -4,6 +4,8 @@
  * Intercepts tool calls to guard against unintended modifications.
  *
  * File guarding (write/edit):
+ *  - Allows canonical /tmp, /var/folders, and current-project .agents trees.
+ *  - Rechecks exempt paths on every call so inner symlinks cannot escape.
  *  - Prompts when target file is in a different git repository than cwd.
  *  - Prompts when target file is not tracked by git (staged or committed).
  *  - In non-interactive mode, blocks by default. Does nothing outside git repos.
@@ -16,8 +18,8 @@
 
 import type { ExtensionAPI, ExtensionContext, BashToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import { resolve, dirname, join } from "node:path";
-import { existsSync, realpathSync, writeFileSync, readFileSync, unlinkSync } from "node:fs";
+import { resolve, dirname, join, relative, isAbsolute, sep } from "node:path";
+import { existsSync, lstatSync, realpathSync, writeFileSync, readFileSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 
@@ -43,13 +45,29 @@ const DESTRUCTIVE_GIT_PATTERNS: RegExp[] = [
 const GIT_TIMEOUT = 5000;
 
 function nearestExistingDir(dir: string): string {
-  while (!existsSync(dir)) {
+  // Keep dangling links so realpath rejects them instead of trusting their parent.
+  while (!lstatSync(dir, { throwIfNoEntry: false })) {
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
   return dir;
 }
+
+function canonicalPath(path: string): string | null {
+  try {
+    const ancestor = nearestExistingDir(path);
+    return resolve(realpathSync(ancestor), relative(ancestor, path));
+  } catch { return null; }
+}
+
+function containsPath(root: string | null, path: string | null): boolean {
+  if (!root || !path) return false;
+  const fromRoot = relative(root, path);
+  return fromRoot !== ".." && !fromRoot.startsWith(`..${sep}`) && !isAbsolute(fromRoot);
+}
+
+const temporaryRoots = ["/tmp", "/var/folders"].filter(existsSync).map(canonicalPath);
 
 function overwriteTargets(command: string): string[] {
   return command.split(/&&|\|\||[;|\n]/).flatMap((segment) => {
@@ -201,23 +219,37 @@ export default function(pi: ExtensionAPI) {
     ctx: ExtensionContext,
   ): Promise<{ block: true; reason: string } | undefined> {
     const abs = resolve(ctx.cwd, filePath);
-    const fileDir = nearestExistingDir(dirname(abs));
+    const canonical = canonicalPath(abs);
+    const isTemporary = temporaryRoots.some((root) => containsPath(root, canonical));
+    const cwdRoot = isTemporary ? null : await getGitRoot(ctx.cwd);
+    if (isTemporary || (cwdRoot && containsPath(canonicalPath(join(cwdRoot, ".agents")), canonical))) {
+      // Exempt calls must not create or retain path-string approvals.
+      sessionTouchedFiles.delete(abs);
+      return undefined;
+    }
+    if (!cwdRoot) {
+      sessionTouchedFiles.add(abs);
+      return undefined;
+    }
+    if (!canonical) {
+      return { block: true, reason: `Blocked ${toolName}: cannot resolve "${filePath}" safely` };
+    }
+    if (sessionTouchedFiles.has(abs)) return undefined;
 
-    const cwdRoot = await getGitRoot(ctx.cwd);
-    if (!cwdRoot) return undefined;
-
-    const fileRoot = await getGitRoot(fileDir);
+    const fileRoot = await getGitRoot(nearestExistingDir(dirname(abs)));
+    let message: string | undefined;
     if (!fileRoot || fileRoot !== cwdRoot) {
-      return promptOrBlock(`"${filePath}" is outside the current git repository`, toolName, ctx);
+      message = `"${filePath}" is outside the current git repository`;
+    } else {
+      const realAbs = existsSync(abs) ? realpathSync(abs) : abs;
+      if (!await isGitTracked(realAbs, cwdRoot) && existsSync(abs)) {
+        message = `"${filePath}" is not tracked by git`;
+      }
     }
 
-    const realAbs = existsSync(abs) ? realpathSync(abs) : abs;
-    if (await isGitTracked(realAbs, cwdRoot)) return undefined;
-
-    // New files (don't exist yet) are always allowed
-    if (!existsSync(abs)) return undefined;
-
-    return promptOrBlock(`"${filePath}" is not tracked by git`, toolName, ctx);
+    const result = message ? await promptOrBlock(message, toolName, ctx) : undefined;
+    if (!result) sessionTouchedFiles.add(abs);
+    return result;
   }
 
   async function gateOverwrite(
@@ -302,18 +334,10 @@ export default function(pi: ExtensionAPI) {
 
   pi.on("tool_call", async (event, ctx) => {
     if (isToolCallEventType("write", event)) {
-      const abs = resolve(ctx.cwd, event.input.path);
-      if (sessionTouchedFiles.has(abs)) return undefined;
-      const result = await gatePath(event.input.path, "write", ctx);
-      if (!result) sessionTouchedFiles.add(abs);
-      return result;
+      return gatePath(event.input.path, "write", ctx);
     }
     if (isToolCallEventType("edit", event)) {
-      const abs = resolve(ctx.cwd, event.input.path);
-      if (sessionTouchedFiles.has(abs)) return undefined;
-      const result = await gatePath(event.input.path, "edit", ctx);
-      if (!result) sessionTouchedFiles.add(abs);
-      return result;
+      return gatePath(event.input.path, "edit", ctx);
     }
     if (isToolCallEventType("bash", event)) {
       const command = event.input.command ?? "";

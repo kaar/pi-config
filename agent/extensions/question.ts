@@ -53,6 +53,10 @@ function registerQuestion(pi: ExtensionAPI) {
 		name: "question",
 		label: "Question",
 		description: "Ask the user a question and let them pick from options. Use when you need user input to proceed.",
+		promptGuidelines: [
+			"When you need an answer from the user, use question instead of asking in plain text. This applies to clarifications, decisions, and confirmations, including questions requested by a skill.",
+			"Provide relevant answer options. The question tool automatically includes a custom-answer option, so do not add one yourself.",
+		],
 		parameters: QuestionParams,
 		executionMode: "sequential",
 

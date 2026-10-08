@@ -4,3 +4,5 @@ models-store.json
 settings.json
 logs/
 pi-server.json
+
+web-search-cache/

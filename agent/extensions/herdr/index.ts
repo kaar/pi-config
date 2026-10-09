@@ -34,19 +34,19 @@ export default function(pi: ExtensionAPI) {
 		const name = generateName(ctx, task);
 
 		try {
-			const { paneId, tabId } = tab ? await herdr.tab(cwd) : await herdr.split(cwd);
-			await herdr.startPi({
-				paneId,
-				agentName: `split-${randomBytes(13).toString("hex")}`,
-				sessionId,
-				modelId,
-				thinkingLevel,
+			const { paneId, tabId } = tab ? await herdr.tabCreate(cwd) : await herdr.paneSplit(cwd);
+			await herdr.agentStartPi({
+				pane: paneId,
+				name: `split-${randomBytes(13).toString("hex")}`,
+				model: modelId,
+				thinking: thinkingLevel,
+				fork: sessionId,
 			});
-			if (task) await herdr.prompt(paneId, task);
+			if (task) await herdr.agentPrompt(paneId, task);
 			void name.then(async (generated) => {
 				if (!generated) return;
-				await herdr.renameAgent(paneId, generated);
-				if (tabId) await herdr.renameTab(tabId, generated);
+				await herdr.agentRename(paneId, generated);
+				if (tabId) await herdr.tabRename(tabId, generated);
 			}).catch(() => { });
 		} catch (error) {
 			ui.notify(`Split failed: ${error instanceof Error ? error.message : String(error)}`, "error");

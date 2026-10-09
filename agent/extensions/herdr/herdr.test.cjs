@@ -90,7 +90,27 @@ function setup({ env = ENV, exec = herdr, complete = async () => reply("Fix Logi
 }
 
 const startArgs = (pane, agent, model = "src/org/model", thinking = "high") =>
-	["agent", "start", agent, "--kind", "pi", "--pane", pane, "--", "--fork", "session-1", "--model", model, "--thinking", thinking];
+	["agent", "start", agent, "--kind", "pi", "--pane", pane, "--", "--model", model, "--thinking", thinking, "--fork", "session-1"];
+
+describe("Pi startup options", () => {
+	const cases = [
+		["no fork", { thinking: "high" }, []],
+		["a fork", { thinking: "high", fork: "session-1" }, ["--fork", "session-1"]],
+		["thinking off and no fork", { thinking: "off" }, []],
+		["thinking off and a fork", { thinking: "off", fork: "session-1" }, ["--fork", "session-1"]],
+	];
+	for (const [label, options, forkArgs] of cases) {
+		it(`starts Pi with ${label}`, async () => {
+			const h = setup();
+			const adapter = load("cli", { env: ENV }).createHerdr(h.pi);
+			await adapter.agentStartPi({ pane: "w:2", name: "test-agent", model: "src/org/model", ...options });
+			assert.deepEqual(h.calls, [[
+				"agent", "start", "test-agent", "--kind", "pi", "--pane", "w:2", "--",
+				"--model", "src/org/model", "--thinking", options.thinking, ...forkArgs,
+			]]);
+		});
+	}
+});
 
 describe("commands", () => {
 	it("registers /split and /split-tab", () => {

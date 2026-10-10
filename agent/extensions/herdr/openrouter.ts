@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
@@ -73,7 +72,6 @@ async function generateText(
 			...options,
 			maxRetries: 0,
 			cacheRetention: "none",
-			sessionId: randomUUID(),
 			headers: {
 				"HTTP-Referer": "https://github.com/kaar/pi-config",
 				"X-OpenRouter-Title": "pi-herdr-extension",

@@ -78,8 +78,7 @@ for (const generator of ["generateName", "generateHandoffPrompt"]) {
 		assert.equal(options.maxTokens, generator === "generateName" ? 64 : undefined);
 		assert.equal(options.maxRetries, 0);
 		assert.equal(options.cacheRetention, "none");
-		assert.match(options.sessionId, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
-		assert.notEqual(options.sessionId, "source-session");
+		assert.equal(Object.hasOwn(options, "sessionId"), false);
 		assert.deepEqual(options.headers, {
 			"HTTP-Referer": "https://github.com/kaar/pi-config",
 			"X-OpenRouter-Title": "pi-herdr-extension",
@@ -121,10 +120,11 @@ for (const generator of ["generateName", "generateHandoffPrompt"]) {
 	});
 }
 
-test("every generation call gets a distinct request session while keeping source attribution", async () => {
+test("concurrent one-shot requests share the source session header without a request session option", async () => {
 	const h = harness();
 	await Promise.all([api.generateName(h.ctx, "one"), api.generateName(h.ctx, "two"), api.generateHandoffPrompt(h.ctx, "three")]);
-	assert.equal(new Set(h.requests.map(({ options }) => options.sessionId)).size, 3);
+	assert.equal(h.requests.length, 3);
+	assert.ok(h.requests.every(({ options }) => !Object.hasOwn(options, "sessionId")));
 	assert.ok(h.requests.every(({ options }) => options.headers["x-session-id"] === "source-session"));
 });
 

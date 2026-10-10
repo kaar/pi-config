@@ -49,7 +49,7 @@ Interactive sub-agent management (experimental, under evaluation).
 - **git-checkpoint** - Automatic git-based checkpoints
 - **todos** - Todo management within sessions
 - **openrouter** - Account credits, current-key usage, app/model spending, and key budgets. See the commands below.
-- **handoff** - `/handoff <goal>` generates a continuation prompt with DeepSeek V4.1 Flash through OpenRouter, with reasoning disabled. It requires OpenRouter credentials. It transfers the draft without source review, focuses the new Herdr pane, and sends Pi's configured external-editor shortcut. Saving and closing returns to an unsubmitted draft. Press Enter in Pi to start work. The new Pi session uses the source implementation model. The source session is not changed. See [agent/extensions/handoff/README.md](agent/extensions/handoff/README.md).
+- **herdr** - `/herdr-fork [task]` forks the saved session into a new Herdr tab. `/herdr-handoff [goal]` generates a continuation prompt through OpenRouter and submits it to a fresh Pi session in a new tab. Both commands preserve source focus, model, and thinking level. Generation runs in the background. See [agent/extensions/herdr/README.md](agent/extensions/herdr/README.md).
 
 ### OpenRouter usage commands
 

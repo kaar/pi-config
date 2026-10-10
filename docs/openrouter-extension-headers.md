@@ -1,6 +1,6 @@
 # OpenRouter headers for Pi extensions
 
-This reference covers app attribution and optional session headers for model requests from Pi extensions. The existing [handoff extension](../agent/extensions/handoff/index.ts) provides the example.
+This reference covers app attribution and optional session headers for model requests from Pi extensions. The shared [Herdr request helper](../agent/extensions/herdr/openrouter.ts) provides the example for naming and handoff.
 
 ## App attribution
 
@@ -14,12 +14,12 @@ Attribution associates API usage with an app in OpenRouter rankings, model Apps 
 
 Without `HTTP-Referer`, OpenRouter does not create an app page or include the usage in rankings. A title or category alone does not create an app entry.
 
-The handoff request uses:
+The shared naming and handoff requests use:
 
 ```ts
 headers: {
   "HTTP-Referer": "https://github.com/kaar/pi-config",
-  "X-OpenRouter-Title": "pi-handoff",
+  "X-OpenRouter-Title": "pi-herdr-extension",
   "X-OpenRouter-Categories": "cli-agent",
 },
 ```
@@ -57,8 +57,6 @@ Headers belong in the request options, not the message content or the JSON paylo
 This excerpt follows the handoff request pattern. It assumes that the extension already has `ctx`, an OpenRouter `model`, a `prompt`, and an optional `signal`.
 
 ```ts
-import { uuidv7 } from "@earendil-works/pi-ai";
-
 const response = await ctx.modelRegistry.complete(
   model,
   {
@@ -72,11 +70,11 @@ const response = await ctx.modelRegistry.complete(
   {
     signal,
     cacheRetention: "none",
-    sessionId: uuidv7(),
     headers: {
       "HTTP-Referer": "https://github.com/kaar/pi-config",
-      "X-OpenRouter-Title": "pi-handoff",
+      "X-OpenRouter-Title": "pi-herdr-extension",
       "X-OpenRouter-Categories": "cli-agent",
+      "x-session-id": ctx.sessionManager.getSessionId(),
     },
     onPayload: (payload: unknown) => ({
       ...(payload as Record<string, unknown>),
@@ -86,7 +84,7 @@ const response = await ctx.modelRegistry.complete(
 );
 ```
 
-The cache and reasoning options match handoff. Neither option is necessary for attribution. Request-local headers affect this call, not all requests in the Pi session.
+Naming and handoff are standalone, one-shot completions. The shared helper keeps `cacheRetention: "none"` and omits the Pi `sessionId` option. It sends the source Pi session ID in `x-session-id` to trace requests in OpenRouter logs. This header also affects sticky routing. The cache option does not necessarily disable automatic caching at the provider. The cache and reasoning options match handoff. Neither option is necessary for attribution. Request-local headers affect this call, not all requests in the Pi session.
 
 If an extension can call other providers, restrict OpenRouter-specific headers to OpenRouter requests.
 
@@ -104,13 +102,13 @@ Pi exposes the current session identifier through `ctx.sessionManager.getSession
 ```ts
 headers: {
   "HTTP-Referer": "https://github.com/kaar/pi-config",
-  "X-OpenRouter-Title": "pi-handoff",
+  "X-OpenRouter-Title": "pi-herdr-extension",
   "X-OpenRouter-Categories": "cli-agent",
   "x-session-id": ctx.sessionManager.getSessionId(),
 },
 ```
 
-This example shows optional session grouping. The handoff code does not explicitly set this header.
+The shared Herdr helper sets this header for both naming and handoff requests. The value identifies the originating Pi session, not a new conversation for each completion.
 
 A stable session identifier provides two benefits:
 
@@ -121,7 +119,7 @@ Sticky routing operates per account, model, and conversation. It favors the same
 
 Sticky sessions expire after **10 minutes of inactivity**. Each successful request resets that timer. The routing timeout does not change the Pi session identifier.
 
-A new random identifier for every request cannot group requests from the same Pi session. The current handoff request has a separate Pi option, `sessionId: uuidv7()`. This option is not the same as the explicit header example.
+A new random identifier for every request cannot group requests from the same Pi session.
 
 Pi adapters can map the `sessionId` option to provider-specific cache or affinity fields. That mapping depends on the adapter, compatibility options, and cache options. In Pi's OpenAI Completions adapter, explicit caller headers override generated affinity headers. For predictable grouping, use a stable identifier and avoid a conflicting body `session_id`.
 
@@ -135,7 +133,7 @@ The optional header `X-OpenRouter-App-Visibility: hidden` creates a new attribut
 
 A missing header or any value other than `hidden` creates a public app. The header cannot change an existing app in either direction. A visibility change for an existing app requires OpenRouter support.
 
-The handoff code does not set this header. Adding it later cannot hide an app that already exists.
+The shared Herdr helper does not set this header. Adding it later cannot hide an app that already exists.
 
 ## References
 

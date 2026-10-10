@@ -1,66 +1,45 @@
-# Herdr session split
+# Herdr commands
 
-`/split` opens an independent copy of the saved session in a right-hand Herdr pane. `/split-tab` opens that copy in a new tab within the caller's current workspace. Both commands require interactive Pi inside Herdr.
+`/herdr-fork [task]` copies the saved session into a new Herdr tab. It submits the optional task after Pi starts. Without a task, Pi waits for input.
 
-Run `/reload` to load this extension from Pi's normal user-extension directory. In this repository, `~/.pi/agent` points to `agent/`. No settings change or installation script is needed.
+`/herdr-handoff [goal]` starts a fresh Pi session in a new tab. It generates a continuation prompt from the current conversation and goal, then submits it automatically. Without a goal, it preserves context and asks Pi to wait for instructions.
 
 ```text
-/split
-/split Create a bug report for this issue
-/split-tab
-/split-tab Explore an alternative approach
+/herdr-fork
+/herdr-fork Create a bug report for this issue
+/herdr-handoff Implement phase one of the plan
 ```
 
-## Conversation and task
+Both commands require interactive Pi inside Herdr and an idle source session. They keep the current workspace, directory, model, and thinking level. Source history, editor draft, and focus stay unchanged. Run `/reload` to load the extension.
 
-The copy includes the entire saved session, including alternative branches. It retains messages, tool results, provider metadata, compaction, context edits, labels, and saved extension state. The child resumes at the last entry in the file, not necessarily your current position in `/tree`.
+## Limits and generation
 
-Both commands require an idle Pi session with a saved conversation. They start the child with `pi --fork <source-session-id>`. Pi resolves that ID and copies the saved history during startup, so changes to the file before startup are included. Launches can overlap. Navigation, session replacement, or shutdown after the command runs does not cancel a launch.
+Fork copies the saved session at startup, including alternative branches. It resumes at the last saved entry, not necessarily your current `/tree` position. In-memory sessions and custom `--session-dir` paths are unsupported.
 
-The child receives a unique session ID and a separate persisted session file in Pi's default session directory. It uses the working directory, selected model, and thinking level from when the command runs. The child header records the source session path. Pi handles labels and file permissions.
+Handoff reads the conversation after startup, including compaction summaries and retained messages. It sends that conversation and goal to OpenRouter. Both commands generate tab names through OpenRouter in the background.
 
-In-memory sessions and sessions stored in a custom `--session-dir` are not supported. The extension does not check for them. Pi exits in the child pane with `No session found`, and the launch fails at `herdr agent start`.
+Generation requires OpenRouter credentials (such as `OPENROUTER_API_KEY`) and `openrouter/deepseek/deepseek-v4.1-flash` in Pi's model catalog. If the model is missing, run `pi update --models`, then reload Pi.
 
-A task is the text after the command, with surrounding whitespace removed. After Herdr reports that Pi is ready, the extension submits that text once. Without a task, the child waits for input. The command returns after startup and optional submission, not after the task finishes.
+Fork returns after the task is submitted. Handoff returns after the generated prompt is submitted, so it can take up to a minute. Naming continues in the background after either command returns. Neither command waits for destination work to finish. Sessions share files on disk, not separate checkouts. Coordinate edits yourself. Results are not returned or merged automatically.
 
-Both commands generate Herdr agent names in the background, and `/split-tab` also renames its tab. Naming sends limited task text and a short excerpt of the last assistant response to OpenRouter, with silent failures.
+## Failures
 
-## Source and resources
+Launch, generation, and submission errors show an error notification. Naming errors show a warning and leave the placeholder agent name (`fork-<id>` or `handoff-<id>`). Failed launches and failed submissions leave created tabs in place. Nothing retries automatically.
 
-The extension leaves source focus, history, selected branch, model, thinking level, and editor draft unchanged. A successful launch shows no notification. The extension does not know the child session path because Pi creates it during startup. It adds no source message or model turn and opens no external editor.
-
-The child discovers normal Pi resources in the same working directory. History inheritance does not copy process-local extension state, active tool selection, or the complete process environment. Command-line-only system prompts, credentials, and resource overrides are not copied.
-
-Both sessions share files on disk. Separate conversation files are not separate checkouts. Coordinate edits yourself.
-
-## Partial launch recovery
-
-If a launch fails, the source shows an error notification. Created panes and any child files that Pi creates remain in place. The extension does not retry startup or task submission.
-
-Inspect the destination before you send more input. A startup error or missing prompt acknowledgment does not prove that Pi stopped or missed the task. To inspect a known pane, use:
+Before resending a task, inspect the destination. A failed acknowledgment does not prove that delivery failed. Error notifications do not include the destination pane. Find it with `herdr agent list`, then inspect it.
 
 ```bash
+herdr agent list
 herdr agent get <pane-id>
 herdr agent read <pane-id> --source recent-unwrapped --lines 120
 ```
 
-If the child is running, use `/session` there to find its session path. To resume that child manually, run Pi in the original working directory:
+## Tests
+
+Run from the repository root. These tests make no live Herdr calls or model requests.
 
 ```bash
-pi --session "<child-session-path>" --session-dir "<child-session-directory>"
-```
-
-Do not open the same child file in two active Pi instances. There is no automatic result routing, completion monitoring, or conversation merge.
-
-## Automated verification
-
-The tests replace Herdr execution, the session manager, model requests, and UI notifications. They check guards, exact Herdr arguments, failure reporting, and background naming. They do not launch agents, fork sessions, or contact models.
-
-```bash
-node --test agent/extensions/herdr/herdr.test.cjs
+node --test agent/extensions/herdr/*.test.cjs
 npm --prefix agent/extensions run typecheck
-node --test agent/extensions/handoff/handoff.test.cjs
 git diff --check
 ```
-
-Live checks still need to establish terminal focus, editor-draft preservation, startup recognition, task behavior, and visible names. Run them only with authorization.

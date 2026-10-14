@@ -260,16 +260,6 @@ Create a skill that turns a URL into a QR code, so I can scan it with my phone a
 - Warn when the URL points to private or secret content (secret gists, signed URLs, URLs with tokens in them).
 - Maybe write it as a small script (like `q-pi`) instead of only a skill, because the steps never change.
 
-## Handoff extension
-
-Ideas from comparing other Pi handoff extensions (`agent/extensions/handoff/`).
-
-- [ ] Replace separate DeepSeek generation with the active session model. See [the session-model handoff plan](docs/plans/2026-10-04-handoff-session-model-suggestion.md).
-
-- [ ] Name the successor session. Add `--name "handoff: <goal>"` to the Pi arguments after `--` in `herdr agent start`, so `/resume` shows a readable name instead of the first prompt line.
-- [ ] Carry the thinking level over. Add `--thinking ${pi.getThinkingLevel()}` next to `--model` in `herdr agent start`. Remove "thinking-level carry-over" from the README's "Not supported" list.
-- [ ] Add timeouts to the `herdr` calls. `pi.exec` currently runs without a timeout, so a hung `herdr` blocks `/handoff` forever. Pass `{ timeout }` to `pi.exec`. Use a longer value for `agent start`, because it waits for Pi to start (other extensions use 10 s for most commands and up to 35 s for `agent start`).
-
 ### To look into
 
 - [ ] Improve the generation prompt. Ideas from `@ssweens/pi-handoff`, `@tifan/pi-handoff`, and Matt Pocock's `handoff` skill: refer to existing plans, specs, and issues by path instead of copying them; remove secrets; keep exact file paths, function names, and error messages; use fixed sections (Goal, Constraints, Done, In progress, Decisions, Next steps); add a "Suggested skills" section. Not sure yet. Check that more structure does not make DeepSeek Flash output longer or less focused on the goal.

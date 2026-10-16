@@ -119,7 +119,7 @@ After the Pi-only test succeeds, install for both Pi and Claude Code:
 npx skills add ogulcancelik/agent-skills --skill web-search --global --agent pi --agent claude-code
 ```
 
-The Skills CLI recommends symlinks, which keeps one canonical copy shared by the selected agents. Alternatively, place one reviewed copy in `~/.agents/skills/web-search/`. Pi discovers that location, and it matches the planned shared-skill layout in `TODO.md`.
+The Skills CLI recommends symlinks, which keeps one canonical copy shared by the selected agents. Alternatively, place one reviewed copy in `~/.agents/skills/web-search/`. Pi discovers that location, and it matches the planned shared-skill layout in `.agents/docs/TODO.md`.
 
 ## What the skill provides
 

@@ -243,10 +243,10 @@ Pi's `examples/extensions/jev-router.ts` uses this in a virtual model. Jev rates
 
 ## Example prompts for this repo
 
-Triage `TODO.md`. The answers are easy to check against what you know:
+Triage `.agents/docs/TODO.md`. The answers are easy to check against what you know:
 
 ```
-Use codemode. Read TODO.md and split it into its "## " sections. Then send them to Jev
+Use codemode. Read .agents/docs/TODO.md and split it into its "## " sections. Then send them to Jev
 (typesafe/jev-latest) with models.classify(). Put each section in the state as its own
 key (title + body). For each section, ask:
 
@@ -259,7 +259,7 @@ Return a table with title, status, effort, needs_research, and the top probabili
 each answer. Only return the table, not the raw Jev output.
 ```
 
-A second opinion for `git-guard`. `TODO.md` records that it blocks `GIT_EDITOR=true git rebase --continue && ...` as interactive:
+A second opinion for `git-guard`. `.agents/docs/TODO.md` records that it blocks `GIT_EDITOR=true git rebase --continue && ...` as interactive:
 
 ```
 Use codemode. Collect the bash commands from docs/research/tailnet-sessions/*.jsonl.

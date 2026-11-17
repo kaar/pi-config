@@ -145,10 +145,16 @@ for (const command of [
   });
 }
 
-test('still requires commit approval', async () => {
-  const result = await check('git commit -m "test"');
+test('allows commits with a message without approval', async () => {
+  assert.equal(await check('git commit -m "test"'), undefined);
+  assert.equal(await check('git commit -F msg.txt'), undefined);
+  assert.equal(await check('git commit --amend --no-edit'), undefined);
+});
+
+test('blocks commits that would open an editor', async () => {
+  const result = await check('git commit');
   assert.equal(result?.block, true);
-  assert.equal(result.reason, 'Blocked bash: git commit requires approval');
+  assert.equal(result.reason, 'Blocked: interactive git commit (would open editor)');
 });
 
 const checkFile = (f, toolName, filePath, ui, cwd = f.cwd) => f.handler(

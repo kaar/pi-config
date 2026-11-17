@@ -6,3 +6,5 @@ logs/
 pi-server.json
 
 web-search-cache/
+mcp-auth.json
+pi-web-access/last-seen-version.json

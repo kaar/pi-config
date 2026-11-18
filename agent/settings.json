@@ -10,12 +10,6 @@
   ],
   "packages": [
     "npm:pi-web-access",
-    {
-      "source": "git:github.com/HazAT/pi-interactive-subagents",
-      "extensions": [
-        "-pi-extension/subagents/index.ts"
-      ]
-    },
     "../../GitHub/kaar/morpheus/pi-server/extensions/pi-bridge",
     "npm:@plannotator/pi-extension"
   ],

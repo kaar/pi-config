@@ -1,0 +1,38 @@
+{
+  "defaultModel": "gpt-6.2-sol",
+  "defaultProvider": "openai-codex",
+  "defaultThinkingLevel": "high",
+  "hideThinkingBlock": false,
+  "lastChangelogVersion": "1.5.2",
+  "tuiMode": "regular",
+  "defaultTools": [
+    "+codemode"
+  ],
+  "packages": [
+    "npm:pi-web-access",
+    {
+      "source": "git:github.com/HazAT/pi-interactive-subagents",
+      "extensions": [
+        "-pi-extension/subagents/index.ts"
+      ]
+    },
+    "../../GitHub/kaar/morpheus/pi-server/extensions/pi-bridge",
+    "npm:@plannotator/pi-extension"
+  ],
+  "theme": "dark",
+  "terminal": {
+    "hyperlinks": false
+  },
+  "enabledModels": [
+    "anthropic/claude-opus-5-5",
+    "anthropic/claude-sonnet-5-5",
+    "anthropic/claude-fable-5-2",
+    "openai-codex/gpt-6.2-astra",
+    "openai-codex/gpt-6.2-sol",
+    "openrouter/moonshotai/kimi-k3.1-pro",
+    "openrouter/deepseek/deepseek-v4.1-flash"
+  ],
+  "extensionChangelogVersions": {
+    "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.48.0"
+  }
+}

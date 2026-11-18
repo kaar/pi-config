@@ -12,6 +12,12 @@
 - Wait for explicit instructions like "implement this", "fix this", "create this"
 - When drafting file content (docs, blog posts, config), apply changes directly without asking for confirmation
 
+## Design approach
+
+Before proposing a new design or a substantial extension, read and follow `~/.pi/agent/guidelines/design-for-learning.md`.
+
+Default to the smallest useful experiment. Do not design for hypothetical future needs.
+
 ## Style
 - Be concise and direct
 - No emojis in commits, issues, PRs, or code

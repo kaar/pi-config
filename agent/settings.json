@@ -29,8 +29,8 @@
     "anthropic/claude-fable-5-2",
     "openai-codex/gpt-6.2-astra",
     "openai-codex/gpt-6.2-sol",
-    "openrouter/moonshotai/kimi-k3.1-pro",
-    "openrouter/deepseek/deepseek-v4.1-flash"
+    "openrouter/~moonshotai/kimi-latest",
+    "openrouter/~deepseek/deepseek-flash-latest"
   ],
   "extensionChangelogVersions": {
     "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.48.0"

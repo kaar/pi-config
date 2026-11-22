@@ -2,6 +2,7 @@
  * Git Guard Extension
  *
  * Intercepts tool calls to guard against unintended modifications.
+ * Use /git-guard off or /git-guard on to change protection for this session.
  *
  * File guarding (write/edit):
  *  - Allows canonical /tmp, /var/folders, and current-project .agents trees.
@@ -90,6 +91,27 @@ function overwriteTargets(command: string): string[] {
 const sessionTouchedFiles = new Set<string>();
 
 export default function(pi: ExtensionAPI) {
+  let enabled = true;
+
+  pi.registerCommand("git-guard", {
+    description: "Show or change Git Guard status: /git-guard [on|off]",
+    handler: async (args, ctx) => {
+      if (!ctx.hasUI) return;
+      const action = args.trim();
+      if (action === "on" || action === "off") {
+        enabled = action === "on";
+        ctx.ui.setStatus("git-guard", enabled ? undefined : "Git Guard OFF");
+      } else if (action) {
+        ctx.ui.notify("Usage: /git-guard [on|off]", "warning");
+        return;
+      }
+      ctx.ui.notify(
+        enabled ? "Git Guard is on." : "Git Guard is off. Use /git-guard on to restore protection.",
+        enabled ? "info" : "warning",
+      );
+    },
+  });
+
   async function getGitRoot(dir: string): Promise<string | null> {
     const realDir = existsSync(dir) ? realpathSync(dir) : dir;
     const { code, stdout } = await pi.exec("git", ["-C", realDir, "rev-parse", "--show-toplevel"], { timeout: GIT_TIMEOUT });
@@ -176,6 +198,7 @@ export default function(pi: ExtensionAPI) {
   }
 
   pi.on("tool_call", async (event, ctx) => {
+    if (!enabled) return undefined;
     if (isToolCallEventType("write", event)) {
       return gatePath(event.input.path, "write", ctx);
     }

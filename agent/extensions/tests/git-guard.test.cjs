@@ -27,6 +27,7 @@ function createHarness({ fileSystem = fs, home } = {}) {
     process,
   });
   let handler;
+  let command;
   const execCalls = [];
   extensionExports.default({
     exec: async (cmd, args) => {
@@ -40,8 +41,12 @@ function createHarness({ fileSystem = fs, home } = {}) {
       assert.equal(name, 'tool_call');
       handler = fn;
     },
+    registerCommand: (name, options) => {
+      assert.equal(name, 'git-guard');
+      command = options.handler;
+    },
   });
-  return { handler, execCalls };
+  return { handler, command, execCalls };
 }
 const { handler } = createHarness();
 const repoRoot = path.join(__dirname, '../../..');
@@ -191,6 +196,47 @@ function fileFixture(t) {
   };
   return { cwd, external, home, tmp, folders, fileSystem, ...createHarness({ fileSystem, home }) };
 }
+
+test('slash command disables and restores all Git Guard checks', async (t) => {
+  const f = fileFixture(t);
+  const statuses = new Map();
+  const ctx = {
+    hasUI: true,
+    ui: {
+      notify: () => {},
+      setStatus: (key, value) => statuses.set(key, value),
+    },
+  };
+  const bash = (command, h = f) => h.handler(
+    { toolName: 'bash', input: { command } },
+    { cwd: f.cwd, hasUI: false },
+  );
+  const commands = ['git reset --hard', 'git commit', 'cp untracked.md tracked.md'];
+
+  await f.command('off', ctx);
+  assert.equal(statuses.get('git-guard'), 'Git Guard OFF');
+  for (const command of commands) assert.equal(await bash(command), undefined);
+  for (const tool of ['write', 'edit']) assert.equal(await checkFile(f, tool, 'untracked.md'), undefined);
+  assert.equal(f.execCalls.length, 0);
+  assert.equal((await bash(commands[0], createHarness()))?.block, true, 'fresh runtime starts enabled');
+
+  await f.command('on', ctx);
+  assert.equal(statuses.get('git-guard'), undefined);
+  for (const command of commands) assert.equal((await bash(command))?.block, true);
+  for (const tool of ['write', 'edit']) assert.equal((await checkFile(f, tool, 'untracked.md'))?.block, true);
+});
+
+test('status queries, invalid arguments, and headless commands do not disable Git Guard', async () => {
+  const f = createHarness();
+  const notices = [];
+  const ctx = { hasUI: true, ui: { notify: (message) => notices.push(message) } };
+  await f.command('', ctx);
+  await f.command('off now', ctx);
+  await f.command('off', { hasUI: false });
+  assert.deepEqual(notices, ['Git Guard is on.', 'Usage: /git-guard [on|off]']);
+  const result = await f.handler({ toolName: 'bash', input: { command: 'git reset --hard' } }, { hasUI: false });
+  assert.equal(result?.block, true);
+});
 
 for (const tool of ['write', 'edit']) {
   test(tool + ': temporary roots bypass approval and Git discovery', async (t) => {

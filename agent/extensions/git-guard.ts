@@ -18,7 +18,7 @@
  *  - Prompts when a command overwrites a tracked file via `git show ... >` or `cp`.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { resolve, dirname, join, relative, isAbsolute, sep } from "node:path";
 import { existsSync, lstatSync, realpathSync } from "node:fs";
@@ -133,9 +133,12 @@ export default function(pi: ExtensionAPI) {
     const reason = `Blocked ${toolName}: ${message}`;
     if (!ctx.hasUI) return { block: true, reason };
 
+    // Pi 1.6.1 supports blockedKind, but the pinned development types predate it.
+    const dialogOptions: ExtensionUIDialogOptions & { blockedKind: "permission" } = { blockedKind: "permission" };
     const choice = await ctx.ui.select(
       `⚠️ ${message}\n\nAllow ${toolName}?`,
       ["Yes, allow this once", "No, block it"],
+      dialogOptions,
     );
     return choice === "Yes, allow this once" ? undefined : { block: true, reason };
   }

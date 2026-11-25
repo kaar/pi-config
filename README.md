@@ -46,7 +46,6 @@ Interactive sub-agent management (experimental, under evaluation).
 ### Custom Extensions
 
 - **git-guard** - Safety checks for destructive git operations
-- **git-checkpoint** - Automatic git-based checkpoints
 - **todos** - Todo management within sessions
 - **openrouter** - Account credits, current-key usage, app/model spending, and key budgets. See the commands below.
 - **herdr** - `/herdr-fork [task]` forks the saved session into a new Herdr tab. `/herdr-handoff [goal]` generates a continuation prompt through OpenRouter and submits it to a fresh Pi session in a new tab. Both commands preserve source focus, model, and thinking level. Generation runs in the background. See [agent/extensions/herdr/README.md](agent/extensions/herdr/README.md).

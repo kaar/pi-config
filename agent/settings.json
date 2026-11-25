@@ -3,7 +3,7 @@
   "defaultProvider": "openai-codex",
   "defaultThinkingLevel": "high",
   "hideThinkingBlock": false,
-  "lastChangelogVersion": "1.6.0",
+  "lastChangelogVersion": "1.6.1",
   "tuiMode": "regular",
   "defaultTools": [
     "+codemode"

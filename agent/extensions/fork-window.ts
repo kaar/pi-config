@@ -25,8 +25,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_before_fork", async (event, ctx) => {
-		const rexSession = process.env.REX_SESSION;
-		if (!rexSession || ctx.mode !== "tui") return;
+		const rexBlock = process.env.REX_BLOCK;
+		if (!rexBlock || ctx.mode !== "tui") return;
 
 		const source = ctx.sessionManager.getSessionFile();
 		const entry = ctx.sessionManager.getEntry(event.entryId);
@@ -48,7 +48,7 @@ export default function (pi: ExtensionAPI) {
 		if (isFork) command.unshift("env", `${DRAFT_ENTRY}=${entry.id}`);
 		const opened = await pi.exec(
 			"rex",
-			["window", "new", "-s", rexSession, "-c", ctx.cwd, "--json", "--", ...command],
+			["window", "new", "-s", rexBlock, "-c", ctx.cwd, "--json", "--", ...command],
 			options,
 		);
 		if (opened.code !== 0) {
@@ -69,7 +69,19 @@ export default function (pi: ExtensionAPI) {
 			return { cancel: true };
 		}
 
-		// Rex.app needs a client action to switch the visible tab.
+		// The CLI accepts a block as a session target, but session.select needs the session ID.
+		const identity = await pi.exec("rex", ["whoami", "--json"], options);
+		let rexSession: unknown;
+		try {
+			if (identity.code === 0) rexSession = JSON.parse(identity.stdout)?.session_id;
+		} catch {
+			// Leave the new tab open even if Rex did not return valid JSON.
+		}
+		if (typeof rexSession !== "string" || !rexSession) {
+			ctx.ui.notify("Rex opened the tab but could not identify its session to select it.", "warning");
+			return { cancel: true };
+		}
+
 		const selected = await pi.exec(
 			"rex",
 			["do", "-s", rexSession, "session.select", `session_id=${rexSession}`, `window_id=${windowId}`],

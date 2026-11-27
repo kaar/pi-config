@@ -81,6 +81,10 @@ function registerQuestion(pi: ExtensionAPI) {
 
 			const allOptions: DisplayOption[] = [...params.options, { label: "Type something.", isOther: true }];
 
+			const dialogOptions = {
+				overlay: false,
+				blocked: { kind: "question", message: "Waiting for your answer" },
+			} as const;
 			const result = await ctx.ui.custom<{ answer: string; wasCustom: boolean; index?: number } | null>(
 				(tui, theme, _kb, done) => {
 					let optionIndex = 0;
@@ -226,6 +230,7 @@ function registerQuestion(pi: ExtensionAPI) {
 						handleInput,
 					};
 				},
+				dialogOptions,
 			);
 
 			// Build simple options list for details
